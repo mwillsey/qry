@@ -1,9 +1,15 @@
-use std::hash::Hash;
-use std::{borrow::Borrow, fmt::Debug};
 use std::{
+    borrow::Borrow,
     collections::{hash_map::Entry, HashMap},
+    fmt::Debug,
+    hash::Hash,
     ops::{Index, IndexMut},
+    slice::ChunksExact,
 };
+
+mod expr;
+
+pub use expr::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct Database<S, T> {
@@ -63,20 +69,25 @@ impl<T> Relation<T> {
         self.ts.len() / self.arity
     }
 
-    pub fn insert(&mut self, tuple: &[T])
+    pub fn insert(&mut self, tuple: &[T]) -> &mut Self
     where
         T: Clone,
     {
         assert_eq!(self.arity, tuple.len());
-        self.ts.extend_from_slice(tuple)
+        self.ts.extend_from_slice(tuple);
+        self
+    }
+
+    pub fn iter(&self) -> ChunksExact<T> {
+        self.ts.chunks_exact(self.arity)
     }
 }
 
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
-pub trait Data: Debug + Clone + Hash + Eq {}
-impl<T> Data for T where T: Debug + Clone + Hash + PartialOrd + Eq {}
+pub trait Data: Debug + Clone + Hash + Eq + Default {}
+impl<T> Data for T where T: Debug + Clone + Hash + PartialOrd + Eq + Default {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term<T> {
@@ -118,13 +129,6 @@ impl<S, T> Query<S, T> {
 mod tests {
     use super::*;
 
-    type Sym = &'static str;
-    type T = &'static str;
-
-    type Relation = super::Relation<T>;
-    type Database = super::Database<Sym, T>;
-    type Query = super::Query<Sym, T>;
-
     macro_rules! query {
         ($( $sym:ident ( $($term:expr),+ ) ),+) => {
             Query::new(vec![$(
@@ -141,7 +145,7 @@ mod tests {
     #[test]
     fn query_macro() {
         let mut db = Database::default();
-        db.add_relation("r", 2);
+        db.add_relation("r", 2).insert(&[1, 1]);
 
         let q = query!(r(0, { "foo" }));
         let q_expected = Query::new(vec![Atom {
@@ -153,16 +157,55 @@ mod tests {
     }
 
     #[test]
-    fn triangle() {
+    fn hashjoin() {
         let mut db = Database::default();
-        db.add_relation("r", 2);
-        db.add_relation("s", 2);
-        db.add_relation("t", 2);
+        db.add_relation("r", 2)
+            .insert(&[1, 2])
+            .insert(&[3, 4])
+            .insert(&[3, 5]);
+        db.add_relation("s", 3)
+            .insert(&[0, 1, 3])
+            .insert(&[1, 1, 3])
+            .insert(&[0, 0, 2]);
 
-        let q = query!(r(0, 1), s(1, 2), t(2, 1));
-        assert_eq!(q.n_vars, 3);
+        let h = HashJoin {
+            small_key: 0,
+            big_key: 2,
+            small: Scan::new("r", 2),
+            big: Scan::new("s", 3),
+        };
 
-        let mut results = Relation::new(q.n_vars);
-        results.ts = db["r"].ts.clone();
+        assert_eq!(
+            vec![
+                vec![3, 4, 0, 1, 3],
+                vec![3, 5, 0, 1, 3],
+                vec![3, 4, 1, 1, 3],
+                vec![3, 5, 1, 1, 3]
+            ],
+            h.eval_to_vecs(&db),
+        );
+
+        let nested1 = EqFilter {
+            keys: (2, 3),
+            inner: h.clone().into_dyn(),
+        };
+
+        assert_eq!(
+            vec![vec![3, 4, 1, 1, 3], vec![3, 5, 1, 1, 3]],
+            nested1.eval_to_vecs(&db),
+        );
+
+        let nested2 = HashJoin {
+            small_key: 0,
+            big_key: 2,
+            small: Scan::new("r", 2),
+            big: EqFilter {
+                keys: (0, 1),
+                inner: Scan::new("s", 3),
+            },
+        }
+        .into_dyn();
+
+        assert_eq!(nested1.eval_to_vecs(&db), nested2.eval_to_vecs(&db));
     }
 }
