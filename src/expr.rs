@@ -1,190 +1,326 @@
 use crate::*;
+use fxhash::FxHashMap;
+use std::sync::Arc;
 
-pub trait Expression<S: RelationSymbol, T: Data> {
-    fn arity(&self) -> usize;
+pub trait Tuple<T: Data>: Into<Vec<T>> + AsRef<[T]> + Hash + Eq + Debug {}
+impl<T: Data> Tuple<T> for Vec<T> {}
+impl<T: Data> Tuple<T> for [T; 1] {}
+impl<T: Data> Tuple<T> for [T; 2] {}
+impl<T: Data> Tuple<T> for [T; 3] {}
 
-    fn eval<F>(&self, ctx: &Database<S, T>, f: F)
-    where
-        F: FnMut(&[T]);
+pub trait Picker<T: Data>: Debug {
+    type Out: Tuple<T>;
+    fn pick(&self, t: &[T]) -> Self::Out;
+}
 
-    fn eval_to_vecs(&self, ctx: &Database<S, T>) -> Vec<Vec<T>>
-where {
-        let mut v = vec![];
-        self.eval(ctx, |tup| v.push(tup.to_vec()));
-        v
-    }
+impl<T: Data> Picker<T> for [usize; 1] {
+    type Out = [T; 1];
 
-    fn into_dyn(self) -> DynExpression<S, T>
-    where
-        Self: Sized + 'static,
-    {
-        DynExpression(Box::new(self))
+    #[inline(always)]
+    fn pick(&self, t: &[T]) -> Self::Out {
+        [grab(t, self[0])]
     }
 }
 
-pub struct DynExpression<S: RelationSymbol, T: Data>(Box<dyn hack::DynExpTrait<S, T>>);
+#[inline(always)]
+fn grab<T: Clone>(ts: &[T], i: usize) -> T {
+    // unsafe { ts.get_unchecked(i) }.clone()
+    ts[i].clone()
+}
 
-mod hack {
-    use super::*;
-    pub trait DynExpTrait<S: RelationSymbol, T: Data> {
-        fn dyn_arity(&self) -> usize;
-        fn dyn_eval(&self, ctx: &Database<S, T>, f: &mut dyn FnMut(&[T]));
+impl<T: Data> Picker<T> for [usize; 2] {
+    type Out = [T; 2];
+
+    #[inline(always)]
+    fn pick(&self, t: &[T]) -> Self::Out {
+        [grab(t, self[0]), grab(t, self[1])]
     }
+}
 
-    impl<S, T, E> DynExpTrait<S, T> for E
+impl<T: Data> Picker<T> for Vec<usize> {
+    type Out = Vec<T>;
+
+    fn pick(&self, ts: &[T]) -> Self::Out {
+        self.iter().copied().map(|i| grab(ts, i)).collect()
+    }
+}
+
+pub trait Picker2<T: Data>: Debug {
+    type Out: Tuple<T>;
+    fn pick2(&self, a: &[T], b: &[T]) -> Self::Out;
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Sided<T> {
+    Left(T),
+    Right(T),
+}
+
+impl<T: Data> Picker2<T> for Vec<Sided<usize>> {
+    type Out = Vec<T>;
+
+    fn pick2(&self, a: &[T], b: &[T]) -> Self::Out {
+        self.iter()
+            .copied()
+            .map(|i| match i {
+                Sided::Left(i) => grab(a, i),
+                Sided::Right(i) => grab(b, i),
+            })
+            .collect()
+    }
+}
+
+pub trait Expression<DB: Database>: Debug {
+    type Tuple: Tuple<DB::T>;
+    // type Tuple;
+    // fn arity(&self) -> usize;
+
+    fn eval<F>(&self, db: &DB, f: F)
     where
-        S: RelationSymbol,
-        T: Data,
-        E: Expression<S, T>,
+        F: FnMut(Self::Tuple);
+
+    fn eval_ref<F>(&self, db: &DB, mut f: F)
+    where
+        F: FnMut(&[DB::T]),
     {
-        fn dyn_arity(&self) -> usize {
-            Expression::arity(self)
+        self.eval(db, |x| f(x.as_ref()))
+    }
+
+    fn collect(&self, db: &DB) -> Vec<Self::Tuple> {
+        let mut v = vec![];
+        self.eval(db, |x| v.push(x));
+        v
+    }
+
+    fn into_dyn(self) -> DynExpression<DB>
+    where
+        Self: Sized + 'static,
+    {
+        DynExpression(Arc::new(self))
+    }
+}
+
+#[derive(Clone)]
+pub struct DynExpression<DB: Database>(Arc<dyn dynexpr::DynExpressionTrait<DB>>);
+
+impl<DB: Database> Debug for DynExpression<DB> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+mod dynexpr {
+    use super::*;
+
+    pub trait DynExpressionTrait<DB: Database>: Debug {
+        fn dyn_eval(&self, db: &DB, f: &mut dyn FnMut(Vec<DB::T>));
+        fn dyn_eval_ref(&self, db: &DB, f: &mut dyn FnMut(&[DB::T]));
+    }
+
+    impl<DB, E> DynExpressionTrait<DB> for E
+    where
+        DB: Database,
+        E: Expression<DB>,
+    {
+        fn dyn_eval(&self, db: &DB, f: &mut dyn FnMut(Vec<DB::T>)) {
+            self.eval(db, |x| f(x.into()));
         }
 
-        fn dyn_eval(&self, ctx: &Database<S, T>, f: &mut dyn FnMut(&[T])) {
-            Expression::eval(self, ctx, f)
+        fn dyn_eval_ref(&self, db: &DB, f: &mut dyn FnMut(&[DB::T])) {
+            self.eval_ref(db, f);
         }
     }
 
-    impl<S: RelationSymbol, T: Data> Expression<S, T> for DynExpression<S, T> {
-        fn arity(&self) -> usize {
-            self.0.dyn_arity()
+    impl<DB: Database> Expression<DB> for DynExpression<DB> {
+        type Tuple = Vec<DB::T>;
+
+        fn eval<F>(&self, db: &DB, mut f: F)
+        where
+            F: FnMut(Self::Tuple),
+        {
+            self.0.dyn_eval(db, &mut f);
         }
 
-        fn eval<F>(&self, ctx: &Database<S, T>, mut f: F)
+        fn eval_ref<F>(&self, db: &DB, mut f: F)
         where
-            F: FnMut(&[T]),
+            F: FnMut(&[DB::T]),
         {
-            self.0.dyn_eval(ctx, &mut f)
+            self.0.dyn_eval_ref(db, &mut f)
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Scan<S> {
-    pub relation: S,
-    pub arity: usize,
+    relation: S,
 }
 
 impl<S> Scan<S> {
-    pub fn new(relation: S, arity: usize) -> Self {
-        Self { relation, arity }
+    pub fn new(relation: S) -> Self {
+        Self { relation }
     }
 }
 
-impl<S: RelationSymbol, T: Data> Expression<S, T> for Scan<S> {
-    fn arity(&self) -> usize {
-        self.arity
+impl<DB: Database> Expression<DB> for Scan<DB::S> {
+    type Tuple = Vec<DB::T>;
+
+    fn eval<F>(&self, db: &DB, mut f: F)
+    where
+        F: FnMut(Self::Tuple),
+    {
+        self.eval_ref(db, |x| f(x.to_owned()));
     }
 
-    fn eval<F>(&self, ctx: &Database<S, T>, f: F)
+    fn eval_ref<F>(&self, db: &DB, f: F)
     where
-        Self: Sized,
-        F: FnMut(&[T]),
+        F: FnMut(&[DB::T]),
     {
-        let r = &ctx[&self.relation];
-        assert_eq!(self.arity, r.arity);
-        r.iter().for_each(f)
+        db.get(&self.relation).for_each(f)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct HashJoin<Small, Big> {
-    pub small_key: usize,
-    pub big_key: usize,
-    pub small: Small,
-    pub big: Big,
+pub struct HashJoin<K1, K2, E1, E2, M> {
+    key1: K1,
+    key2: K2,
+    expr1: E1,
+    pub(crate) expr2: E2,
+    merge: M,
 }
 
-impl<S, T, Small, Big> Expression<S, T> for HashJoin<Small, Big>
+impl<K, Out, K1, K2, E1, E2, M, DB> Expression<DB> for HashJoin<K1, K2, E1, E2, M>
 where
-    S: RelationSymbol,
-    T: Data,
-    Small: Expression<S, T>,
-    Big: Expression<S, T>,
+    K: Hash + Eq,
+    Out: Clone + Tuple<DB::T>,
+    DB: Database,
+    E1: Expression<DB>,
+    E2: Expression<DB>,
+    K1: Picker<DB::T, Out = K>,
+    K2: Picker<DB::T, Out = K>,
+    M: Picker2<DB::T, Out = Out>,
 {
-    fn arity(&self) -> usize {
-        self.small.arity() + self.big.arity()
-    }
+    type Tuple = Out;
 
-    fn eval<F>(&self, ctx: &Database<S, T>, mut f: F)
+    fn eval<F>(&self, db: &DB, mut f: F)
     where
-        Self: Sized,
-        F: FnMut(&[T]),
+        F: FnMut(Self::Tuple),
     {
-        let mut vec = vec![T::default(); self.arity()];
-        let mut h: HashMap<T, Vec<T>> = Default::default();
-        self.small.eval(ctx, |tup| {
-            let k = tup[self.small_key].clone();
-            h.entry(k).or_default().extend_from_slice(tup);
+        let mut map: FxHashMap<K, Vec<E1::Tuple>> = Default::default();
+        self.expr1.eval(db, |t1| {
+            let k = self.key1.pick(t1.as_ref());
+            map.entry(k).or_default().push(t1);
         });
 
-        let sn = self.small.arity();
-        self.big.eval(ctx, |tup| {
-            if let Some(smalls) = h.get(&tup[self.big_key]) {
-                for small in smalls.chunks(sn) {
-                    vec[..sn].clone_from_slice(small);
-                    vec[sn..].clone_from_slice(tup);
-                    f(&vec);
+        self.expr2.eval_ref(db, |t2| {
+            let k = self.key2.pick(t2);
+            if let Some(t1s) = map.get(&k) {
+                for t1 in t1s {
+                    let t: Out = self.merge.pick2(t1.as_ref(), t2);
+                    f(t)
                 }
             }
-        })
+        });
     }
 }
 
-pub struct EqFilter<Inner> {
-    pub keys: (usize, usize),
-    pub inner: Inner,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    type DB = SimpleDatabase<&'static str, u32>;
 
-impl<S, T, Inner> Expression<S, T> for EqFilter<Inner>
-where
-    S: RelationSymbol,
-    T: Data,
-    Inner: Expression<S, T>,
-{
-    fn arity(&self) -> usize {
-        self.inner.arity()
-    }
+    #[test]
+    fn triangle() {
+        let mut db = DB::default();
 
-    fn eval<F>(&self, ctx: &Database<S, T>, mut f: F)
-    where
-        Self: Sized,
-        F: FnMut(&[T]),
-    {
-        self.inner.eval(ctx, |tup| {
-            if tup[self.keys.0] == tup[self.keys.1] {
-                f(tup)
-            }
-        })
-    }
-}
+        // R(0,1) S(1,2) T(2, 0)
 
-pub struct CheckConstant<T, Inner> {
-    pub constant: T,
-    pub key: usize,
-    pub inner: Inner,
-}
+        let mut r = vec![];
+        let mut s = vec![];
+        let mut t = vec![];
 
-impl<S, T, Inner> Expression<S, T> for CheckConstant<T, Inner>
-where
-    S: RelationSymbol,
-    T: Data,
-    Inner: Expression<S, T>,
-{
-    fn arity(&self) -> usize {
-        self.inner.arity()
-    }
+        let mut triangles = vec![vec![0, 10, 20], vec![3, 44, 16], vec![77, 6, 31]];
 
-    fn eval<F>(&self, ctx: &Database<S, T>, mut f: F)
-    where
-        Self: Sized,
-        F: FnMut(&[T]),
-    {
-        self.inner.eval(ctx, |tup| {
-            if tup[self.key] == self.constant {
-                f(tup)
-            }
-        })
+        triangles.sort();
+        triangles.dedup();
+
+        for tri in &triangles {
+            let (a, b, c) = (tri[0], tri[1], tri[2]);
+            r.push(vec![a, b]);
+            s.push(vec![b, c]);
+            t.push(vec![c, a]);
+        }
+
+        // add some junk
+        let junk = if cfg!(debug_assertions) { 100 } else { 10000 };
+        for i in 0..junk {
+            let j = i + 1;
+            r.push(vec![i, j]);
+            s.push(vec![i, j]);
+            t.push(vec![i, j]);
+        }
+
+        r.sort();
+        r.dedup();
+        s.sort();
+        s.dedup();
+        t.sort();
+        t.dedup();
+
+        db.map.insert("r", (2, r.concat()));
+        db.map.insert("s", (2, s.concat()));
+        db.map.insert("t", (2, t.concat()));
+
+        use Sided::*;
+
+        let q1 = HashJoin {
+            key1: [0, 1],
+            key2: [0, 1],
+            merge: vec![Right(0), Right(1), Right(2)],
+            expr1: Scan::new("r"),
+            expr2: HashJoin {
+                key1: [1],
+                key2: [0],
+                merge: vec![Right(1), Left(0), Left(1)],
+                expr1: Scan::new("s"),
+                expr2: Scan::new("t"),
+            },
+        };
+
+        let q2 = HashJoin {
+            key1: [0, 2],
+            key2: [1, 0],
+            merge: vec![Left(0), Left(1), Left(2)],
+            expr1: HashJoin {
+                key1: [1],
+                key2: [0],
+                merge: vec![Left(0), Left(1), Right(1)],
+                expr1: Scan::new("r"),
+                expr2: Scan::new("s"),
+            },
+            expr2: Scan::new("t"),
+        };
+
+        let n = 300;
+        let test = |q: DynExpression<DB>| {
+            let (mut results, times): (Vec<_>, Vec<_>) = std::iter::repeat_with(|| {
+                let start = std::time::Instant::now();
+                (q.collect(&db), start.elapsed())
+            })
+            .take(n)
+            .unzip();
+            println!("min time: {:?}", times.iter().min().unwrap());
+            let mut result = results.pop().unwrap();
+            result.sort();
+            result.dedup();
+            result
+        };
+
+        println!("{:?}", Expression::<DB>::into_dyn(q1.clone()));
+
+        let result1 = test(q1.into_dyn());
+        let result2 = test(q2.into_dyn());
+
+        assert_eq!(result1, triangles);
+        assert_eq!(result2, triangles);
     }
 }

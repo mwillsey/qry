@@ -1,93 +1,39 @@
-use std::{
-    borrow::Borrow,
-    collections::{hash_map::Entry, HashMap},
-    fmt::Debug,
-    hash::Hash,
-    ops::{Index, IndexMut},
-    slice::ChunksExact,
-};
+use fxhash::FxHashMap;
+use std::{fmt::Debug, hash::Hash, slice::ChunksExact};
 
 mod expr;
-
 pub use expr::*;
-
-#[derive(Debug, Clone, Default)]
-pub struct Database<S, T> {
-    relations: HashMap<S, Relation<T>>,
-}
-
-impl<S: RelationSymbol, T: Data> Database<S, T> {
-    pub fn add_relation(&mut self, symbol: S, arity: usize) -> &mut Relation<T> {
-        match self.relations.entry(symbol) {
-            Entry::Occupied(e) => panic!("Relation {:?} already present", e.key()),
-            Entry::Vacant(e) => e.insert(Relation::new(arity)),
-        }
-    }
-}
-
-impl<K, S, T> Index<K> for Database<S, T>
-where
-    K: Borrow<S>,
-    S: RelationSymbol,
-    T: Data,
-{
-    type Output = Relation<T>;
-    fn index(&self, symbol: K) -> &Self::Output {
-        self.relations.get(symbol.borrow()).unwrap()
-    }
-}
-
-impl<K, S, T> IndexMut<K> for Database<S, T>
-where
-    K: Borrow<S>,
-    S: RelationSymbol,
-    T: Data,
-{
-    fn index_mut(&mut self, symbol: K) -> &mut Self::Output {
-        self.relations.get_mut(symbol.borrow()).unwrap()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Relation<T> {
-    arity: usize,
-    ts: Vec<T>,
-}
-
-impl<T> Relation<T> {
-    pub fn new(arity: usize) -> Self {
-        let ts = Default::default();
-        Self { arity, ts }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ts.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.ts.len() % self.arity, 0);
-        self.ts.len() / self.arity
-    }
-
-    pub fn insert(&mut self, tuple: &[T]) -> &mut Self
-    where
-        T: Clone,
-    {
-        assert_eq!(self.arity, tuple.len());
-        self.ts.extend_from_slice(tuple);
-        self
-    }
-
-    pub fn iter(&self) -> ChunksExact<T> {
-        self.ts.chunks_exact(self.arity)
-    }
-}
 
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
 pub trait Data: Debug + Clone + Hash + Eq + Default {}
 impl<T> Data for T where T: Debug + Clone + Hash + PartialOrd + Eq + Default {}
+
+pub trait Database {
+    type S: RelationSymbol;
+    type T: Data;
+    fn get(&self, sym: &Self::S) -> ChunksExact<Self::T>;
+}
+
+#[derive(Default)]
+struct SimpleDatabase<S, T> {
+    pub map: FxHashMap<S, (usize, Vec<T>)>,
+}
+
+impl<S, T> Database for SimpleDatabase<S, T>
+where
+    S: RelationSymbol,
+    T: Data,
+{
+    type S = S;
+    type T = T;
+
+    fn get(&self, sym: &Self::S) -> ChunksExact<Self::T> {
+        let (arity, ts) = &self.map[sym];
+        ts.chunks_exact(*arity)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term<T> {
@@ -144,9 +90,6 @@ mod tests {
 
     #[test]
     fn query_macro() {
-        let mut db = Database::default();
-        db.add_relation("r", 2).insert(&[1, 1]);
-
         let q = query!(r(0, { "foo" }));
         let q_expected = Query::new(vec![Atom {
             symbol: "r",
@@ -154,58 +97,5 @@ mod tests {
         }]);
         assert_eq!(q, q_expected);
         assert_eq!(q.n_vars, 1);
-    }
-
-    #[test]
-    fn hashjoin() {
-        let mut db = Database::default();
-        db.add_relation("r", 2)
-            .insert(&[1, 2])
-            .insert(&[3, 4])
-            .insert(&[3, 5]);
-        db.add_relation("s", 3)
-            .insert(&[0, 1, 3])
-            .insert(&[1, 1, 3])
-            .insert(&[0, 0, 2]);
-
-        let h = HashJoin {
-            small_key: 0,
-            big_key: 2,
-            small: Scan::new("r", 2),
-            big: Scan::new("s", 3),
-        };
-
-        assert_eq!(
-            vec![
-                vec![3, 4, 0, 1, 3],
-                vec![3, 5, 0, 1, 3],
-                vec![3, 4, 1, 1, 3],
-                vec![3, 5, 1, 1, 3]
-            ],
-            h.eval_to_vecs(&db),
-        );
-
-        let nested1 = EqFilter {
-            keys: (2, 3),
-            inner: h.clone().into_dyn(),
-        };
-
-        assert_eq!(
-            vec![vec![3, 4, 1, 1, 3], vec![3, 5, 1, 1, 3]],
-            nested1.eval_to_vecs(&db),
-        );
-
-        let nested2 = HashJoin {
-            small_key: 0,
-            big_key: 2,
-            small: Scan::new("r", 2),
-            big: EqFilter {
-                keys: (0, 1),
-                inner: Scan::new("s", 3),
-            },
-        }
-        .into_dyn();
-
-        assert_eq!(nested1.eval_to_vecs(&db), nested2.eval_to_vecs(&db));
     }
 }
