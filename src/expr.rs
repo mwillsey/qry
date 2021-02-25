@@ -184,7 +184,7 @@ pub struct HashJoin<K1, K2, E1, E2, M> {
     key1: K1,
     key2: K2,
     expr1: E1,
-    pub(crate) expr2: E2,
+    expr2: E2,
     merge: M,
 }
 
@@ -223,6 +223,7 @@ where
     }
 }
 
+#[allow(clippy::many_single_char_names)]
 #[cfg(test)]
 mod tests {
     use super::*;
