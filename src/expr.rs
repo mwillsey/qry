@@ -181,11 +181,11 @@ impl<DB: Database> Expression<DB> for Scan<DB::S> {
 
 #[derive(Debug, Clone)]
 pub struct HashJoin<K1, K2, E1, E2, M> {
-    key1: K1,
-    key2: K2,
-    expr1: E1,
-    expr2: E2,
-    merge: M,
+    pub key1: K1,
+    pub key2: K2,
+    pub expr1: E1,
+    pub expr2: E2,
+    pub merge: M,
 }
 
 impl<K, Out, K1, K2, E1, E2, M, DB> Expression<DB> for HashJoin<K1, K2, E1, E2, M>
@@ -287,19 +287,17 @@ mod tests {
             },
         };
 
-        let q2 = HashJoin {
-            key1: [0, 2],
-            key2: [1, 0],
-            merge: vec![Left(0), Left(1), Left(2)],
-            expr1: HashJoin {
-                key1: [1],
-                key2: [0],
-                merge: vec![Left(0), Left(1), Right(1)],
-                expr1: Scan::new("r"),
-                expr2: Scan::new("s"),
-            },
-            expr2: Scan::new("t"),
+        let atom = |s: &'static str, vars: Vec<Var>| Atom {
+            symbol: s,
+            terms: vars.into_iter().map(Term::Variable).collect(),
         };
+
+        let q2 = Query::new(vec![
+            atom("r", vec![0, 1]),
+            atom("s", vec![1, 2]),
+            atom("t", vec![2, 0]),
+        ])
+        .compile();
 
         let n = 300;
         let test = |q: DynExpression<DB>| {
