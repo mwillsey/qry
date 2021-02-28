@@ -179,13 +179,20 @@ impl<DB: Database> Expression<DB> for Scan<DB::S> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Filter<E, P> {
-    expr: E,
+pub struct Filter<P, E> {
     pred: P,
+    expr: E,
 }
 
-impl<E, P, DB: Database> Expression<DB> for Filter<E, P>
+use std::fmt;
+
+impl<P, E: Debug> fmt::Debug for Filter<P, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Filter").field("expr", &self.expr).finish()
+    }
+}
+
+impl<P, E, DB: Database> Expression<DB> for Filter<P, E>
 where
     E: Expression<DB>,
     P: Debug + Fn(&E::Tuple) -> bool,
