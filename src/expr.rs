@@ -194,8 +194,8 @@ impl<P, E: Debug> fmt::Debug for Filter<P, E> {
 
 impl<P, E, DB: Database> Expression<DB> for Filter<P, E>
 where
+    P: Fn(&E::Tuple) -> bool,
     E: Expression<DB>,
-    P: Debug + Fn(&E::Tuple) -> bool,
 {
     type Tuple = E::Tuple;
 
