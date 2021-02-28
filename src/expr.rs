@@ -180,6 +180,31 @@ impl<DB: Database> Expression<DB> for Scan<DB::S> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Filter<E, P> {
+    expr: E,
+    pred: P,
+}
+
+impl<E, P, DB: Database> Expression<DB> for Filter<E, P>
+where
+    E: Expression<DB>,
+    P: Debug + Fn(&E::Tuple) -> bool,
+{
+    type Tuple = E::Tuple;
+
+    fn eval<F>(&self, db: &DB, mut f: F)
+    where
+        F: FnMut(Self::Tuple),
+    {
+        self.expr.eval(db, |t| {
+            if (self.pred)(&t) {
+                f(t)
+            }
+        });
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HashJoin<K1, K2, E1, E2, M> {
     pub key1: K1,
     pub key2: K2,
