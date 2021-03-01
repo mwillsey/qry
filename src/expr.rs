@@ -345,8 +345,8 @@ mod tests {
         db.map.insert("r", (2, r.concat()));
 
         let q: DynExpression<DB> = Query::new(vec![
-            Atom::new("r", vec![C(7), V(0)]),
-            Atom::new("r", vec![V(0), V(0)]),
+            Atom::new("r", vec![C(7), V("a")]),
+            Atom::new("r", vec![V("a"), V("a")]),
         ])
         .compile();
 

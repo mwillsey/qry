@@ -35,86 +35,71 @@ where
     }
 }
 
-pub type Var = u32;
-
 #[derive(Debug, Clone, PartialEq)]
-pub enum Term<T> {
-    Variable(Var),
+pub enum Term<V, T> {
+    Variable(V),
     Constant(T),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Atom<S, T> {
+pub struct Atom<V, S, T> {
     pub symbol: S,
-    pub terms: Vec<Term<T>>,
+    pub terms: Vec<Term<V, T>>,
 }
 
-impl<S, T> Atom<S, T> {
-    pub fn new(symbol: S, terms: Vec<Term<T>>) -> Self {
+impl<V: Clone, S, T> Atom<V, S, T> {
+    pub fn new(symbol: S, terms: Vec<Term<V, T>>) -> Self {
         Self { symbol, terms }
     }
 
-    pub fn vars(&self) -> impl Iterator<Item = Var> + '_ {
+    pub fn vars(&self) -> impl Iterator<Item = V> + '_ {
         self.terms.iter().filter_map(|t| match t {
-            Term::Variable(v) => Some(*v),
+            Term::Variable(v) => Some(v.clone()),
             Term::Constant(_) => None,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Query<S, T> {
-    n_vars: usize,
-    atoms: Vec<Atom<S, T>>,
+pub struct Query<V, S, T> {
+    pub vars: Vec<V>,
+    pub atoms: Vec<Atom<V, S, T>>,
 }
 
-type VarMap = FxHashMap<Var, usize>;
-
-impl<S, T> Query<S, T> {
-    pub fn new(atoms: Vec<Atom<S, T>>) -> Self {
-        let mut vars = vec![];
-        for atom in &atoms {
-            for term in &atom.terms {
-                if let Term::Variable(v) = term {
-                    vars.push(*v);
-                }
-            }
-        }
-        vars.sort_unstable();
-        vars.dedup();
-        let n_vars = vars.len();
-        assert!(vars.iter().map(|i| *i as usize).eq(0..n_vars));
-        Self { atoms, n_vars }
-    }
-
-    pub fn relabel(mut atoms: Vec<Atom<S, T>>) -> (Self, VarMap) {
-        let mut vars = VarMap::default();
-        for atom in &mut atoms {
-            for term in &mut atom.terms {
-                if let Term::Variable(ref mut v) = term {
-                    let n = vars.len();
-                    *v = *vars.entry(*v).or_insert(n) as Var;
-                }
-            }
-        }
-        let n_vars = vars.len();
-        (Self { atoms, n_vars }, vars)
-    }
-
-    fn split(mut self) -> (Self, VarMap, Self, VarMap) {
-        assert!(self.atoms.len() >= 2);
-
-        let other_atoms = self.atoms.split_off(self.atoms.len() / 2);
-
-        let (left, lv) = Self::relabel(self.atoms);
-        let (right, rv) = Self::relabel(other_atoms);
-
-        (left, lv, right, rv)
-    }
-}
-
-impl<S, T> Query<S, T>
+impl<V, S, T> Query<V, S, T>
 where
+    V: Eq + Hash + Clone,
+{
+    pub fn new(atoms: Vec<Atom<V, S, T>>) -> Self {
+        let mut new = Self {
+            atoms,
+            vars: vec![],
+        };
+
+        for atom in &new.atoms {
+            for var in atom.vars() {
+                if new.index_of(&var).is_none() {
+                    new.vars.push(var)
+                }
+            }
+        }
+        new
+    }
+
+    pub fn index_of(&self, var: &V) -> Option<usize> {
+        self.vars.iter().position(|v| v == var)
+    }
+
+    fn split(mut self) -> (Self, Self) {
+        assert!(self.atoms.len() >= 2);
+        let other_atoms = self.atoms.split_off(self.atoms.len() / 2);
+        (Self::new(self.atoms), Self::new(other_atoms))
+    }
+}
+
+impl<V, S, T> Query<V, S, T>
+where
+    V: Hash + Eq + Clone,
     S: RelationSymbol + 'static,
     T: Data + 'static,
 {
@@ -128,11 +113,11 @@ where
                 let mut atoms = self.atoms;
                 let atom = atoms.pop().unwrap();
 
-                let mut used_vars: FxHashMap<Var, Vec<usize>> = Default::default();
+                let mut used_vars: FxHashMap<V, Vec<usize>> = Default::default();
                 let mut term_eqs: Vec<(T, usize)> = vec![];
                 for (i, term) in atom.terms.iter().enumerate() {
                     match term {
-                        Term::Variable(v) => used_vars.entry(*v).or_default().push(i),
+                        Term::Variable(v) => used_vars.entry(v.clone()).or_default().push(i),
                         Term::Constant(c) => term_eqs.push((c.clone(), i)),
                     }
                 }
@@ -152,21 +137,24 @@ where
                 .into_dyn()
             }
             _ => {
-                let n_vars = self.n_vars;
-                let (q1, v1, q2, v2) = self.split();
-                let (key1, key2): (Vec<usize>, Vec<usize>) = v1
+                let my_vars = self.vars.clone();
+                let (q1, q2) = self.split();
+                let (key1, key2): (Vec<usize>, Vec<usize>) = q1
+                    .vars
                     .iter()
-                    .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
+                    .enumerate()
+                    .filter_map(|(i1, v)| q2.index_of(v).map(|i2| (i1, i2)))
                     .unzip();
 
-                let merge: Vec<Sided<usize>> = (0..n_vars as Var)
+                let merge: Vec<Sided<usize>> = my_vars
+                    .into_iter()
                     .map(|v| {
-                        if let Some(i) = v1.get(&v) {
-                            Sided::Left(*i)
-                        } else if let Some(i) = v2.get(&v) {
-                            Sided::Right(*i)
+                        if let Some(i) = q1.index_of(&v) {
+                            Sided::Left(i)
+                        } else if let Some(i) = q2.index_of(&v) {
+                            Sided::Right(i)
                         } else {
-                            panic!()
+                            unreachable!("var has to come from one side")
                         }
                     })
                     .collect();
@@ -209,6 +197,6 @@ mod tests {
             terms: vec![Term::Variable(0), Term::Constant("foo")],
         }]);
         assert_eq!(q, q_expected);
-        assert_eq!(q.n_vars, 1);
+        assert_eq!(q.vars, vec![0]);
     }
 }
