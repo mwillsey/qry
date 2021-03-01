@@ -50,7 +50,11 @@ pub struct Atom<S, T> {
 }
 
 impl<S, T> Atom<S, T> {
-    fn vars(&self) -> impl Iterator<Item = Var> + '_ {
+    pub fn new(symbol: S, terms: Vec<Term<T>>) -> Self {
+        Self { symbol, terms }
+    }
+
+    pub fn vars(&self) -> impl Iterator<Item = Var> + '_ {
         self.terms.iter().filter_map(|t| match t {
             Term::Variable(v) => Some(*v),
             Term::Constant(_) => None,
@@ -112,7 +116,7 @@ impl<S, T> Query<S, T> {
 impl<S, T> Query<S, T>
 where
     S: RelationSymbol + 'static,
-    T: Data,
+    T: Data + 'static,
 {
     pub fn compile<DB>(self) -> DynExpression<DB>
     where
@@ -124,14 +128,28 @@ where
                 let mut atoms = self.atoms;
                 let atom = atoms.pop().unwrap();
 
-                let vars: Vec<Var> = atom.vars().collect();
-                let n_vars = vars.len();
-                if n_vars == atom.terms.len() && vars.into_iter().eq(0..n_vars as Var) {
-                    Scan::new(atom.symbol).into_dyn()
-                } else {
-                    // if there is non-linearity or constants, we just can't handle it rn
-                    unimplemented!()
+                let mut used_vars: FxHashMap<Var, Vec<usize>> = Default::default();
+                let mut term_eqs: Vec<(T, usize)> = vec![];
+                for (i, term) in atom.terms.iter().enumerate() {
+                    match term {
+                        Term::Variable(v) => used_vars.entry(*v).or_default().push(i),
+                        Term::Constant(c) => term_eqs.push((c.clone(), i)),
+                    }
                 }
+
+                let mut var_eqs: Vec<(usize, usize)> = vec![];
+                for (_v, occurences) in used_vars {
+                    for pair in occurences.windows(2) {
+                        var_eqs.push((pair[0], pair[1]))
+                    }
+                }
+
+                Scan {
+                    relation: atom.symbol,
+                    var_eqs,
+                    term_eqs,
+                }
+                .into_dyn()
             }
             _ => {
                 let n_vars = self.n_vars;

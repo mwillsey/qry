@@ -151,17 +151,23 @@ mod dynexpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct Scan<S> {
-    relation: S,
+pub struct Scan<S, T> {
+    pub var_eqs: Vec<(usize, usize)>,
+    pub term_eqs: Vec<(T, usize)>,
+    pub relation: S,
 }
 
-impl<S> Scan<S> {
+impl<S, T> Scan<S, T> {
     pub fn new(relation: S) -> Self {
-        Self { relation }
+        Self {
+            relation,
+            var_eqs: vec![],
+            term_eqs: vec![],
+        }
     }
 }
 
-impl<DB: Database> Expression<DB> for Scan<DB::S> {
+impl<DB: Database> Expression<DB> for Scan<DB::S, DB::T> {
     type Tuple = Vec<DB::T>;
 
     fn eval<F>(&self, db: &DB, mut f: F)
@@ -175,39 +181,10 @@ impl<DB: Database> Expression<DB> for Scan<DB::S> {
     where
         F: FnMut(&[DB::T]),
     {
-        db.get(&self.relation).for_each(f)
-    }
-}
-
-pub struct Filter<P, E> {
-    pred: P,
-    expr: E,
-}
-
-use std::fmt;
-
-impl<P, E: Debug> fmt::Debug for Filter<P, E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Filter").field("expr", &self.expr).finish()
-    }
-}
-
-impl<P, E, DB: Database> Expression<DB> for Filter<P, E>
-where
-    P: Fn(&E::Tuple) -> bool,
-    E: Expression<DB>,
-{
-    type Tuple = E::Tuple;
-
-    fn eval<F>(&self, db: &DB, mut f: F)
-    where
-        F: FnMut(Self::Tuple),
-    {
-        self.expr.eval(db, |t| {
-            if (self.pred)(&t) {
-                f(t)
-            }
-        });
+        db.get(&self.relation)
+            .filter(|x| self.var_eqs.iter().all(|(i, j)| x[*i] == x[*j]))
+            .filter(|x| self.term_eqs.iter().all(|(t, i)| &x[*i] == t))
+            .for_each(f)
     }
 }
 
@@ -258,7 +235,9 @@ where
 #[allow(clippy::many_single_char_names)]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::*;
+    use Term::{Constant as C, Variable as V};
+
     type DB = SimpleDatabase<&'static str, u32>;
 
     #[test]
@@ -319,15 +298,10 @@ mod tests {
             },
         };
 
-        let atom = |s: &'static str, vars: Vec<Var>| Atom {
-            symbol: s,
-            terms: vars.into_iter().map(Term::Variable).collect(),
-        };
-
         let q2 = Query::new(vec![
-            atom("r", vec![0, 1]),
-            atom("s", vec![1, 2]),
-            atom("t", vec![2, 0]),
+            Atom::new("r", vec![V(0), V(1)]),
+            Atom::new("s", vec![V(1), V(2)]),
+            Atom::new("t", vec![V(2), V(0)]),
         ])
         .compile();
 
@@ -353,5 +327,32 @@ mod tests {
 
         assert_eq!(result1, triangles);
         assert_eq!(result2, triangles);
+    }
+
+    #[test]
+    fn equality() {
+        let mut db = DB::default();
+
+        let mut r = vec![];
+
+        let n = 10;
+        for i in 0..n {
+            for j in 0..n {
+                r.push(vec![i, j]);
+            }
+        }
+
+        db.map.insert("r", (2, r.concat()));
+
+        let q: DynExpression<DB> = Query::new(vec![
+            Atom::new("r", vec![C(7), V(0)]),
+            Atom::new("r", vec![V(0), V(0)]),
+        ])
+        .compile();
+
+        let expected = vec![vec![7]; n as usize];
+        let actual = q.collect(&db);
+
+        assert_eq!(expected, actual);
     }
 }
