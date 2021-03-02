@@ -61,10 +61,9 @@ impl<T: Data> Picker2<T> for Vec<Sided<usize>> {
 
     fn pick2(&self, a: &[T], b: &[T]) -> Self::Out {
         self.iter()
-            .copied()
             .map(|i| match i {
-                Sided::Left(i) => grab(a, i),
-                Sided::Right(i) => grab(b, i),
+                Sided::Left(i) => grab(a, *i),
+                Sided::Right(i) => grab(b, *i),
             })
             .collect()
     }
@@ -100,8 +99,13 @@ pub trait Expression<DB: Database>: Debug {
     }
 }
 
-#[derive(Clone)]
 pub struct DynExpression<DB: Database>(Arc<dyn dynexpr::DynExpressionTrait<DB>>);
+
+impl<DB: Database> Clone for DynExpression<DB> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<DB: Database> Debug for DynExpression<DB> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

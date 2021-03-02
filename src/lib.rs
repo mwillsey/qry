@@ -7,8 +7,8 @@ pub use expr::*;
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
-pub trait Data: Debug + Clone + Hash + Eq + Default {}
-impl<T> Data for T where T: Debug + Clone + Hash + PartialOrd + Eq + Default {}
+pub trait Data: Debug + Clone + Hash + Eq {}
+impl<T> Data for T where T: Debug + Clone + Hash + Eq {}
 
 pub trait Database {
     type S: RelationSymbol;
@@ -16,9 +16,16 @@ pub trait Database {
     fn get(&self, sym: &Self::S) -> ChunksExact<Self::T>;
 }
 
-#[derive(Default)]
-struct SimpleDatabase<S, T> {
+#[derive(Debug, Clone)]
+pub struct SimpleDatabase<S, T> {
     pub map: FxHashMap<S, (usize, Vec<T>)>,
+}
+
+impl<S, T> Default for SimpleDatabase<S, T> {
+    fn default() -> Self {
+        let map = Default::default();
+        Self { map }
+    }
 }
 
 impl<S, T> Database for SimpleDatabase<S, T>
@@ -30,8 +37,11 @@ where
     type T = T;
 
     fn get(&self, sym: &Self::S) -> ChunksExact<Self::T> {
-        let (arity, ts) = &self.map[sym];
-        ts.chunks_exact(*arity)
+        if let Some((arity, ts)) = self.map.get(sym) {
+            ts.chunks_exact(*arity)
+        } else {
+            (&[]).chunks_exact(1)
+        }
     }
 }
 
