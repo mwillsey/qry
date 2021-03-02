@@ -71,8 +71,6 @@ impl<T: Data> Picker2<T> for Vec<Sided<usize>> {
 
 pub trait Expression<DB: Database>: Debug {
     type Tuple: Tuple<DB::T>;
-    // type Tuple;
-    // fn arity(&self) -> usize;
 
     fn eval<F>(&self, db: &DB, f: F)
     where
@@ -84,6 +82,8 @@ pub trait Expression<DB: Database>: Debug {
     {
         self.eval(db, |x| f(x.as_ref()))
     }
+
+    fn size_hint(&self, _db: &DB) -> (usize, usize);
 
     fn collect(&self, db: &DB) -> Vec<Self::Tuple> {
         let mut v = vec![];
@@ -119,6 +119,7 @@ mod dynexpr {
     pub trait DynExpressionTrait<DB: Database>: Debug {
         fn dyn_eval(&self, db: &DB, f: &mut dyn FnMut(Vec<DB::T>));
         fn dyn_eval_ref(&self, db: &DB, f: &mut dyn FnMut(&[DB::T]));
+        fn dyn_size_hint(&self, db: &DB) -> (usize, usize);
     }
 
     impl<DB, E> DynExpressionTrait<DB> for E
@@ -132,6 +133,10 @@ mod dynexpr {
 
         fn dyn_eval_ref(&self, db: &DB, f: &mut dyn FnMut(&[DB::T])) {
             self.eval_ref(db, f);
+        }
+
+        fn dyn_size_hint(&self, db: &DB) -> (usize, usize) {
+            self.size_hint(db)
         }
     }
 
@@ -150,6 +155,10 @@ mod dynexpr {
             F: FnMut(&[DB::T]),
         {
             self.0.dyn_eval_ref(db, &mut f)
+        }
+
+        fn size_hint(&self, db: &DB) -> (usize, usize) {
+            self.0.dyn_size_hint(db)
         }
     }
 }
@@ -190,6 +199,19 @@ impl<DB: Database> Expression<DB> for Scan<DB::S, DB::T> {
             .filter(|x| self.term_eqs.iter().all(|(t, i)| &x[*i] == t))
             .for_each(f)
     }
+
+    fn size_hint(&self, db: &DB) -> (usize, usize) {
+        let len = db.get(&self.relation).len();
+        if len == 0 {
+            return (0, 0);
+        }
+
+        if self.var_eqs.is_empty() && self.term_eqs.is_empty() {
+            return (len, len);
+        }
+
+        (0, len)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +240,10 @@ where
     where
         F: FnMut(Self::Tuple),
     {
+        if self.size_hint(db).1 == 0 {
+            return;
+        }
+
         let mut map: FxHashMap<K, Vec<E1::Tuple>> = Default::default();
         self.expr1.eval(db, |t1| {
             let k = self.key1.pick(t1.as_ref());
@@ -233,6 +259,12 @@ where
                 }
             }
         });
+    }
+
+    fn size_hint(&self, db: &DB) -> (usize, usize) {
+        let (_lo1, hi1) = self.expr1.size_hint(db);
+        let (_lo2, hi2) = self.expr2.size_hint(db);
+        (0, hi1.saturating_mul(hi2))
     }
 }
 
