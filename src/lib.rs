@@ -10,35 +10,32 @@ impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 pub trait Data: Debug + Clone + Hash + Eq {}
 impl<T> Data for T where T: Debug + Clone + Hash + Eq {}
 
-pub trait Database {
-    type S: RelationSymbol;
-    type T: Data;
-    fn get(&self, sym: &Self::S) -> ChunksExact<Self::T>;
+#[derive(Debug, Clone)]
+pub struct Relation<T> {
+    pub arity: usize,
+    pub data: Vec<T>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SimpleDatabase<S, T> {
-    pub map: FxHashMap<S, (usize, Vec<T>)>,
+pub struct Database<S, T> {
+    pub relations: FxHashMap<S, Relation<T>>,
 }
 
-impl<S, T> Default for SimpleDatabase<S, T> {
+impl<S, T> Default for Database<S, T> {
     fn default() -> Self {
-        let map = Default::default();
-        Self { map }
+        let relations = Default::default();
+        Self { relations }
     }
 }
 
-impl<S, T> Database for SimpleDatabase<S, T>
-where
-    S: RelationSymbol,
-    T: Data,
-{
-    type S = S;
-    type T = T;
+impl<S: RelationSymbol, T: Data> Database<S, T> {
+    pub fn add_relation_with_data(&mut self, sym: S, arity: usize, data: Vec<T>) {
+        self.relations.insert(sym, Relation { arity, data });
+    }
 
-    fn get(&self, sym: &Self::S) -> ChunksExact<Self::T> {
-        if let Some((arity, ts)) = self.map.get(sym) {
-            ts.chunks_exact(*arity)
+    pub fn get(&self, sym: &S) -> ChunksExact<T> {
+        if let Some(r) = self.relations.get(sym) {
+            r.data.chunks_exact(r.arity)
         } else {
             (&[]).chunks_exact(1)
         }
@@ -113,10 +110,7 @@ where
     S: RelationSymbol + 'static,
     T: Data + 'static,
 {
-    pub fn compile<DB>(self) -> DynExpression<DB>
-    where
-        DB: Database<S = S, T = T> + 'static,
-    {
+    pub fn compile(self) -> Expr<S, T> {
         match self.atoms.len() {
             0 => panic!(),
             1 => {
@@ -139,12 +133,11 @@ where
                     }
                 }
 
-                Scan {
+                Expr::Scan {
                     relation: atom.symbol,
                     var_eqs,
                     term_eqs,
                 }
-                .into_dyn()
             }
             _ => {
                 let my_vars = self.vars.clone();
@@ -169,14 +162,17 @@ where
                     })
                     .collect();
 
-                HashJoin {
-                    key1,
-                    key2,
+                Expr::Join {
+                    left: Keyed {
+                        key: key1,
+                        expr: Box::new(q1.compile()),
+                    },
+                    right: Keyed {
+                        key: key2,
+                        expr: Box::new(q2.compile()),
+                    },
                     merge,
-                    expr1: q1.compile(),
-                    expr2: q2.compile(),
                 }
-                .into_dyn()
             }
         }
     }
