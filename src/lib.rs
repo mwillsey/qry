@@ -4,13 +4,13 @@ use std::{fmt::Debug, hash::Hash, slice::ChunksExact};
 mod expr;
 pub use expr::*;
 
-pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
-impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
+pub trait RelationSymbol: Debug + Clone + Hash + Eq + 'static {}
+impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq + 'static {}
 
-pub trait Data: Debug + Clone + Hash + Eq {}
-impl<T> Data for T where T: Debug + Clone + Hash + Eq {}
+pub trait Data: Debug + Clone + Hash + Eq + 'static {}
+impl<T> Data for T where T: Debug + Clone + Hash + Eq + 'static {}
 
-pub trait Database {
+pub trait Database: Debug {
     type S: RelationSymbol;
     type T: Data;
     fn get(&self, sym: &Self::S) -> ChunksExact<Self::T>;
