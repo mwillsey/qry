@@ -11,14 +11,8 @@ pub trait Data: Debug + Clone + Hash + Eq {}
 impl<T> Data for T where T: Debug + Clone + Hash + Eq {}
 
 #[derive(Debug, Clone)]
-pub struct Relation<T> {
-    pub arity: usize,
-    pub data: Vec<T>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Database<S, T> {
-    pub relations: FxHashMap<S, Relation<T>>,
+    pub relations: FxHashMap<(S, usize), Vec<T>>,
 }
 
 impl<S, T> Default for Database<S, T> {
@@ -30,12 +24,12 @@ impl<S, T> Default for Database<S, T> {
 
 impl<S: RelationSymbol, T: Data> Database<S, T> {
     pub fn add_relation_with_data(&mut self, sym: S, arity: usize, data: Vec<T>) {
-        self.relations.insert(sym, Relation { arity, data });
+        self.relations.insert((sym, arity), data);
     }
 
-    pub fn get(&self, sym: &S) -> ChunksExact<T> {
-        if let Some(r) = self.relations.get(sym) {
-            r.data.chunks_exact(r.arity)
+    pub fn get(&self, key: &(S, usize)) -> ChunksExact<T> {
+        if let Some(data) = self.relations.get(key) {
+            data.chunks_exact(key.1)
         } else {
             (&[]).chunks_exact(1)
         }
@@ -51,12 +45,17 @@ pub enum Term<V, T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom<V, S, T> {
     pub symbol: S,
+    pub arity: usize,
     pub terms: Vec<Term<V, T>>,
 }
 
 impl<V: Clone, S, T> Atom<V, S, T> {
     pub fn new(symbol: S, terms: Vec<Term<V, T>>) -> Self {
-        Self { symbol, terms }
+        Self {
+            symbol,
+            arity: terms.len(),
+            terms,
+        }
     }
 
     pub fn vars(&self) -> impl Iterator<Item = V> + '_ {
@@ -134,7 +133,7 @@ where
                 }
 
                 Expr::Scan {
-                    relation: atom.symbol,
+                    relation: (atom.symbol, atom.arity),
                     var_eqs,
                     term_eqs,
                 }
@@ -175,34 +174,5 @@ where
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    macro_rules! query {
-        ($( $sym:ident ( $($term:expr),+ ) ),+) => {
-            Query::new(vec![$(
-                Atom {
-                    symbol: stringify!($sym),
-                    terms: vec![$(query!(@term $term)),*],
-                }
-            ),+])
-        };
-        (@term $e:literal ) => { Term::Variable($e) };
-        (@term $e:expr ) => { Term::Constant($e) };
-    }
-
-    #[test]
-    fn query_macro() {
-        let q = query!(r(0, { "foo" }));
-        let q_expected = Query::new(vec![Atom {
-            symbol: "r",
-            terms: vec![Term::Variable(0), Term::Constant("foo")],
-        }]);
-        assert_eq!(q, q_expected);
-        assert_eq!(q.vars, vec![0]);
     }
 }

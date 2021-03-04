@@ -2,28 +2,57 @@ use std::rc::Rc;
 
 use crate::*;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
 pub enum Sided<T> {
     Left(T),
     Right(T),
 }
 
+impl Sided<usize> {
+    fn choose<T: Data>(&self, left: &[T], right: &[T]) -> T {
+        match self {
+            Sided::Left(i) => left[*i].clone(),
+            Sided::Right(i) => right[*i].clone(),
+        }
+    }
+}
+
 pub type Key = Vec<usize>;
 pub type Key2 = Vec<Sided<usize>>;
-pub type KeyedMap<T> = FxHashMap<Vec<T>, Vec<Vec<T>>>;
+
+type MapData1<T> = FxHashMap<T, Vec<T>>;
+type MapData2<T> = FxHashMap<[T; 2], Vec<T>>;
+type MapData3<T> = FxHashMap<[T; 3], Vec<T>>;
+type MapDataN<T> = FxHashMap<Vec<T>, Vec<T>>;
+
+#[derive(Debug, Clone)]
+enum KeyedMapKind<T> {
+    A0(Vec<T>),
+    A1(MapData1<T>),
+    A2(MapData2<T>),
+    A3(MapData3<T>),
+    Vec(MapDataN<T>),
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyedMap<T> {
+    arity: usize,
+    data: KeyedMapKind<T>,
+}
 
 fn pick<T: Clone>(key: &[usize], tuple: &[T]) -> Vec<T> {
     key.iter().map(|&i| tuple[i].clone()).collect()
 }
 
-fn pick2<T: Clone>(merge: &[Sided<usize>], left: &[T], right: &[T]) -> Vec<T> {
-    merge
-        .iter()
-        .map(|side| match side {
-            Sided::Left(i) => left[*i].clone(),
-            Sided::Right(i) => right[*i].clone(),
-        })
-        .collect()
+fn merge_pick<'a, T: Clone>(
+    merge: &'a [Sided<usize>],
+    left: &'a [T],
+    right: &'a [T],
+) -> impl Iterator<Item = T> + 'a {
+    merge.iter().map(move |side| match side {
+        Sided::Left(i) => left[*i].clone(),
+        Sided::Right(i) => right[*i].clone(),
+    })
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -35,7 +64,7 @@ pub struct Keyed<S, T> {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Expr<S, T> {
     Scan {
-        relation: S,
+        relation: (S, usize),
         var_eqs: Vec<(usize, usize)>,
         term_eqs: Vec<(T, usize)>,
     },
@@ -65,69 +94,206 @@ impl<S, T> Default for EvalContext<S, T> {
     }
 }
 
+fn do_join<T, F>(left: Rc<KeyedMap<T>>, right: Rc<KeyedMap<T>>, mut f: F)
+where
+    T: Data,
+    F: FnMut(&[T], &[T]),
+{
+    let mut cross = |tups1: &[T], tups2: &[T]| {
+        if tups1.len() <= tups2.len() {
+            for tup1 in tups1.chunks_exact(left.arity) {
+                for tup2 in tups2.chunks_exact(right.arity) {
+                    f(tup1, tup2)
+                }
+            }
+        } else {
+            for tup2 in tups2.chunks_exact(right.arity) {
+                for tup1 in tups1.chunks_exact(left.arity) {
+                    f(tup1, tup2)
+                }
+            }
+        }
+    };
+
+    macro_rules! inner {
+        ($l:expr, $r:expr) => {{
+            let (l, r) = ($l, $r);
+            if l.len() <= r.len() {
+                for (k, ll) in l {
+                    if let Some(rr) = r.get(k) {
+                        cross(ll, rr)
+                    }
+                }
+            } else {
+                for (k, rr) in r {
+                    if let Some(ll) = l.get(k) {
+                        cross(ll, rr)
+                    }
+                }
+            }
+        }};
+    }
+
+    match (&left.data, &right.data) {
+        (KeyedMapKind::A0(l), KeyedMapKind::A0(r)) => cross(l, r),
+        (KeyedMapKind::A1(l), KeyedMapKind::A1(r)) => inner!(l, r),
+        (KeyedMapKind::A2(l), KeyedMapKind::A2(r)) => inner!(l, r),
+        (KeyedMapKind::A3(l), KeyedMapKind::A3(r)) => inner!(l, r),
+        (KeyedMapKind::Vec(l), KeyedMapKind::Vec(r)) => inner!(l, r),
+        _ => panic!("{:?}\n{:?}", left, right),
+    }
+}
+
 impl<S: RelationSymbol, T: Data> Expr<S, T> {
+    pub fn arity(&self) -> usize {
+        match self {
+            Expr::Scan { relation, .. } => relation.1,
+            Expr::Join { merge, .. } => merge.len(),
+        }
+    }
     pub fn eval(
         &self,
         key: &[usize],
         db: &Database<S, T>,
         ctx: &mut EvalContext<S, T>,
     ) -> KeyedMap<T> {
-        let mut map = KeyedMap::default();
         match self {
             Expr::Scan {
                 relation,
                 var_eqs,
                 term_eqs,
             } => {
-                for tup in db.get(relation) {
-                    if var_eqs.iter().all(|(i, j)| tup[*i] == tup[*j])
+                let iter = db.get(relation).filter(|tup| {
+                    var_eqs.iter().all(|(i, j)| tup[*i] == tup[*j])
                         && term_eqs.iter().all(|(t, i)| t == &tup[*i])
-                    {
-                        map.entry(pick(key, tup)).or_default().push(tup.to_vec())
+                });
+                let data = match key {
+                    &[] => {
+                        let mut data = vec![];
+                        iter.for_each(|tup| data.extend_from_slice(tup));
+                        KeyedMapKind::A0(data)
                     }
+                    &[k1] => {
+                        let mut data = MapData1::default();
+                        iter.for_each(|tup| {
+                            data.entry(tup[k1].clone())
+                                .or_default()
+                                .extend_from_slice(tup)
+                        });
+                        KeyedMapKind::A1(data)
+                    }
+                    &[k1, k2] => {
+                        let mut data = MapData2::default();
+                        iter.for_each(|tup| {
+                            let k = [tup[k1].clone(), tup[k2].clone()];
+                            data.entry(k).or_default().extend_from_slice(tup)
+                        });
+                        KeyedMapKind::A2(data)
+                    }
+                    &[k1, k2, k3] => {
+                        let mut data = MapData3::default();
+                        iter.for_each(|tup| {
+                            let k = [tup[k1].clone(), tup[k2].clone(), tup[k3].clone()];
+                            data.entry(k).or_default().extend_from_slice(tup)
+                        });
+                        KeyedMapKind::A3(data)
+                    }
+                    key => {
+                        let mut data = MapDataN::default();
+                        iter.for_each(|tup| {
+                            data.entry(pick(key, tup))
+                                .or_default()
+                                .extend_from_slice(tup)
+                        });
+                        KeyedMapKind::Vec(data)
+                    }
+                };
+                KeyedMap {
+                    arity: relation.1,
+                    data,
                 }
             }
             Expr::Join { left, right, merge } => {
                 assert_eq!(left.key.len(), right.key.len());
-                let left = if let Some(left) = ctx.cache.get(left) {
-                    left.clone()
+                let left = if let Some(hit) = ctx.cache.get(left) {
+                    // println!("hit {:?}", left);
+                    Rc::clone(hit)
                 } else {
                     let out = Rc::new(left.expr.eval(&left.key, db, ctx));
                     ctx.cache.insert(left.clone(), out.clone());
                     out
                 };
-                let right = if let Some(right) = ctx.cache.get(right) {
-                    right.clone()
+                let right = if let Some(hit) = ctx.cache.get(right) {
+                    // println!("hit {:?}", right);
+                    Rc::clone(hit)
                 } else {
                     let out = Rc::new(right.expr.eval(&right.key, db, ctx));
                     ctx.cache.insert(right.clone(), out.clone());
                     out
                 };
-                for (k1, vals1) in left.iter() {
-                    if let Some(vals2) = right.get(k1) {
-                        for val1 in vals1 {
-                            for val2 in vals2 {
-                                let merged = pick2(merge, val1, val2);
-                                map.entry(pick(key, &merged)).or_default().push(merged);
-                            }
-                        }
+                let key_merge = pick(key, merge);
+                let data = match key_merge.as_slice() {
+                    &[] => {
+                        let mut data = vec![];
+                        do_join(left, right, |l, r| data.extend(merge_pick(merge, l, r)));
+                        KeyedMapKind::A0(data)
                     }
+                    &[k1] => {
+                        let mut data = MapData1::default();
+                        do_join(left, right, |l, r| {
+                            data.entry(k1.choose(l, r))
+                                .or_default()
+                                .extend(merge_pick(merge, l, r))
+                        });
+                        KeyedMapKind::A1(data)
+                    }
+                    &[k1, k2] => {
+                        let mut data = MapData2::default();
+                        do_join(left, right, |l, r| {
+                            let k = [k1.choose(l, r), k2.choose(l, r)];
+                            data.entry(k).or_default().extend(merge_pick(merge, l, r))
+                        });
+                        KeyedMapKind::A2(data)
+                    }
+                    &[k1, k2, k3] => {
+                        let mut data = MapData3::default();
+                        do_join(left, right, |l, r| {
+                            let k = [k1.choose(l, r), k2.choose(l, r), k3.choose(l, r)];
+                            data.entry(k).or_default().extend(merge_pick(merge, l, r))
+                        });
+                        KeyedMapKind::A3(data)
+                    }
+                    _ => panic!(),
+                };
+                KeyedMap {
+                    arity: merge.len(),
+                    data,
                 }
             }
         }
-        debug_assert!(map.is_empty() || map.keys().next().unwrap().len() == key.len());
-        map
+    }
+
+    pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, f: F)
+    where
+        F: FnMut(&[T]),
+    {
+        let key = &[];
+        let map = self.eval(key, db, ctx);
+        match map.data {
+            KeyedMapKind::A0(data) => data.chunks_exact(self.arity()).for_each(f),
+            _ => unreachable!(),
+        }
     }
 
     pub fn collect(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>) -> Vec<Vec<T>> {
-        let key = &[];
-        let mut map = self.eval(key, db, ctx);
-        map.remove(&vec![]).unwrap_or_default()
+        let mut v = vec![];
+        self.for_each(db, ctx, |tup| v.push(tup.to_vec()));
+        v
     }
 
-    pub fn new_scan(relation: S) -> Self {
+    pub fn new_scan(symbol: S, arity: usize) -> Self {
         Self::Scan {
-            relation,
+            relation: (symbol, arity),
             var_eqs: vec![],
             term_eqs: vec![],
         }
@@ -205,7 +371,7 @@ mod tests {
             merge: vec![Right(0), Right(1), Right(2)],
             left: Keyed {
                 key: vec![0, 1],
-                expr: Box::new(Expr::new_scan("r")),
+                expr: Box::new(Expr::new_scan("r", 2)),
             },
             right: Keyed {
                 key: vec![0, 1],
@@ -213,22 +379,24 @@ mod tests {
                     merge: vec![Right(1), Left(0), Left(1)],
                     left: Keyed {
                         key: vec![1],
-                        expr: Box::new(Expr::new_scan("s")),
+                        expr: Box::new(Expr::new_scan("s", 2)),
                     },
                     right: Keyed {
                         key: vec![0],
-                        expr: Box::new(Expr::new_scan("t")),
+                        expr: Box::new(Expr::new_scan("t", 2)),
                     },
                 }),
             },
         };
 
-        let q2 = Query::<_, _, i32>::new(vec![
-            Atom::new("r", vec![V(0), V(1)]),
-            Atom::new("s", vec![V(1), V(2)]),
-            Atom::new("t", vec![V(2), V(0)]),
-        ])
-        .compile();
+        let q2 = q1.clone();
+
+        // let q2 = Query::<_, _, i32>::new(vec![
+        //     Atom::new("r", vec![V(0), V(1)]),
+        //     Atom::new("s", vec![V(1), V(2)]),
+        //     Atom::new("t", vec![V(2), V(0)]),
+        // ])
+        // .compile();
 
         let n = 300;
         let test = |q: Expr<_, _>| {
