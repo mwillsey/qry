@@ -104,16 +104,10 @@ where
         let mut edges = vec![];
         let mut nodes = self.atoms.iter().enumerate();
         while let Some((i, atom1)) = nodes.next() {
+            let vars1: FxHashSet<V> = atom1.vars().collect();
             for (j, atom2) in nodes.clone() {
                 assert!(i < j);
-                let mut weight = 0;
-                for v1 in atom1.vars() {
-                    for v2 in atom2.vars() {
-                        if v1 == v2 {
-                            weight += 1;
-                        }
-                    }
-                }
+                let weight = atom2.vars().filter(|v2| vars1.contains(v2)).count();
                 edges.push((weight, i, j));
             }
         }

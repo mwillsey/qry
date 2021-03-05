@@ -228,12 +228,12 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
                 };
                 let key_merge = pick(key, merge);
                 let data = match key_merge.as_slice() {
-                    &[] => {
+                    [] => {
                         let mut data = vec![];
                         do_join(left, right, |l, r| data.extend(merge_pick(merge, l, r)));
                         KeyedMapKind::A0(data)
                     }
-                    &[k1] => {
+                    [k1] => {
                         let mut data = MapData1::default();
                         do_join(left, right, |l, r| {
                             data.entry(k1.choose(l, r))
@@ -242,7 +242,7 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
                         });
                         KeyedMapKind::A1(data)
                     }
-                    &[k1, k2] => {
+                    [k1, k2] => {
                         let mut data = MapData2::default();
                         do_join(left, right, |l, r| {
                             let k = [k1.choose(l, r), k2.choose(l, r)];
@@ -250,7 +250,7 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
                         });
                         KeyedMapKind::A2(data)
                     }
-                    &[k1, k2, k3] => {
+                    [k1, k2, k3] => {
                         let mut data = MapData3::default();
                         do_join(left, right, |l, r| {
                             let k = [k1.choose(l, r), k2.choose(l, r), k3.choose(l, r)];
@@ -435,13 +435,9 @@ mod tests {
             Atom::new("r", vec![V("e"), V("f")]), // 2
             Atom::new("r", vec![V("d"), V("e")]), // 3
             Atom::new("r", vec![V("a"), V("b")]), // 4
-            Atom::new("r", vec![V("x"), V("y")]), // 5
         ])
         .compile();
 
-        let expected = vec![vec![7]; n as usize];
-        let actual = q.1.collect(&db, &mut EvalContext::default());
-
-        // assert_eq!(expected, actual);
+        q.1.collect(&db, &mut EvalContext::default());
     }
 }
