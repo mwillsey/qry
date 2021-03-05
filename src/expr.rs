@@ -314,7 +314,7 @@ mod tests {
         ])
         .compile();
 
-        let result = q.collect(&db, &mut EvalContext::default());
+        let result = q.1.collect(&db, &mut EvalContext::default());
         assert_eq!(result, vec![vec![1, 2, 3, 4]]);
     }
 
@@ -382,14 +382,13 @@ mod tests {
             },
         };
 
-        let q2 = q1.clone();
-
-        // let q2 = Query::<_, _, i32>::new(vec![
-        //     Atom::new("r", vec![V(0), V(1)]),
-        //     Atom::new("s", vec![V(1), V(2)]),
-        //     Atom::new("t", vec![V(2), V(0)]),
-        // ])
-        // .compile();
+        let q2 = Query::<_, _, i32>::new(vec![
+            Atom::new("r", vec![V(0), V(1)]),
+            Atom::new("s", vec![V(1), V(2)]),
+            Atom::new("t", vec![V(2), V(0)]),
+        ])
+        .compile()
+        .1;
 
         let n = 300;
         let test = |q: Expr<_, _>| {
@@ -415,30 +414,34 @@ mod tests {
         assert_eq!(result2, triangles);
     }
 
-    // #[test]
-    // fn equality() {
-    //     let mut db = DB::default();
+    #[test]
+    fn linear() {
+        let mut db = Database::<&'static str, i32>::default();
 
-    //     let mut r = vec![];
+        let mut r = vec![];
 
-    //     let n = 10;
-    //     for i in 0..n {
-    //         for j in 0..n {
-    //             r.push(vec![i, j]);
-    //         }
-    //     }
+        let n = 5;
+        for i in 0..n {
+            for j in 0..n {
+                r.push(vec![i, j]);
+            }
+        }
 
-    //     db.map.insert("r", (2, r.concat()));
+        db.add_relation_with_data("r", 2, r.concat());
 
-    //     let q: DynExpression<DB> = Query::new(vec![
-    //         Atom::new("r", vec![C(7), V("a")]),
-    //         Atom::new("r", vec![V("a"), V("a")]),
-    //     ])
-    //     .compile();
+        let q = Query::new(vec![
+            Atom::new("r", vec![V("b"), V("c")]), // 0
+            Atom::new("r", vec![V("c"), V("d")]), // 1
+            Atom::new("r", vec![V("e"), V("f")]), // 2
+            Atom::new("r", vec![V("d"), V("e")]), // 3
+            Atom::new("r", vec![V("a"), V("b")]), // 4
+            Atom::new("r", vec![V("x"), V("y")]), // 5
+        ])
+        .compile();
 
-    //     let expected = vec![vec![7]; n as usize];
-    //     let actual = q.collect(&db);
+        let expected = vec![vec![7]; n as usize];
+        let actual = q.1.collect(&db, &mut EvalContext::default());
 
-    //     assert_eq!(expected, actual);
-    // }
+        // assert_eq!(expected, actual);
+    }
 }

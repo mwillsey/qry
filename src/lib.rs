@@ -1,5 +1,5 @@
-use fxhash::FxHashMap;
-use std::{fmt::Debug, hash::Hash, slice::ChunksExact};
+use fxhash::{FxHashMap, FxHashSet};
+use std::{fmt::Debug, hash::Hash, rc::Rc, slice::ChunksExact};
 
 mod expr;
 pub use expr::*;
@@ -66,40 +66,21 @@ impl<V: Clone, S, T> Atom<V, S, T> {
     }
 }
 
+pub type VarMap<V> = FxHashMap<V, usize>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query<V, S, T> {
-    pub vars: Vec<V>,
     pub atoms: Vec<Atom<V, S, T>>,
 }
 
 impl<V, S, T> Query<V, S, T>
 where
     V: Eq + Hash + Clone,
+    S: RelationSymbol,
+    T: Data,
 {
     pub fn new(atoms: Vec<Atom<V, S, T>>) -> Self {
-        let mut new = Self {
-            atoms,
-            vars: vec![],
-        };
-
-        for atom in &new.atoms {
-            for var in atom.vars() {
-                if new.index_of(&var).is_none() {
-                    new.vars.push(var)
-                }
-            }
-        }
-        new
-    }
-
-    pub fn index_of(&self, var: &V) -> Option<usize> {
-        self.vars.iter().position(|v| v == var)
-    }
-
-    fn split(mut self) -> (Self, Self) {
-        assert!(self.atoms.len() >= 2);
-        let other_atoms = self.atoms.split_off(self.atoms.len() / 2);
-        (Self::new(self.atoms), Self::new(other_atoms))
+        Self { atoms }
     }
 }
 
@@ -109,13 +90,53 @@ where
     S: RelationSymbol + 'static,
     T: Data + 'static,
 {
-    pub fn compile(self) -> Expr<S, T> {
-        match self.atoms.len() {
-            0 => panic!(),
-            1 => {
-                let mut atoms = self.atoms;
-                let atom = atoms.pop().unwrap();
+    pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
+        assert!(!self.atoms.is_empty());
 
+        let mut by_var: FxHashMap<V, FxHashSet<usize>> = Default::default();
+        for (i, atom) in self.atoms.iter().enumerate() {
+            for var in atom.vars() {
+                by_var.entry(var.clone()).or_default().insert(i);
+            }
+        }
+
+        // Use Kruskal's algorithm to find a max spanning tree
+        let mut edges = vec![];
+        let mut nodes = self.atoms.iter().enumerate();
+        while let Some((i, atom1)) = nodes.next() {
+            for (j, atom2) in nodes.clone() {
+                assert!(i < j);
+                let mut weight = 0;
+                for v1 in atom1.vars() {
+                    for v2 in atom2.vars() {
+                        if v1 == v2 {
+                            weight += 1;
+                        }
+                    }
+                }
+                edges.push((weight, i, j));
+            }
+        }
+        edges.sort();
+
+        let n = self.atoms.len();
+        let mut uf = UnionFind::new(n);
+
+        for (_weight, i, j) in edges.iter().cloned().rev() {
+            uf.union(i, j);
+        }
+
+        // everything is in the same set
+        debug_assert!((0..n - 1).all(|i| uf.find(i) == uf.find(i + 1)));
+
+        let tree = &uf.tree[uf.find(0)];
+        self.compile_rec(tree)
+    }
+
+    fn compile_rec(&self, tree: &Tree) -> (VarMap<V>, Expr<S, T>) {
+        match tree {
+            Tree::Leaf((), i) => {
+                let atom = &self.atoms[*i];
                 let mut used_vars: FxHashMap<V, Vec<usize>> = Default::default();
                 let mut term_eqs: Vec<(T, usize)> = vec![];
                 for (i, term) in atom.terms.iter().enumerate() {
@@ -125,54 +146,117 @@ where
                     }
                 }
 
+                let mut var_map = VarMap::default();
                 let mut var_eqs: Vec<(usize, usize)> = vec![];
-                for (_v, occurences) in used_vars {
+                for (v, occurences) in used_vars {
+                    var_map.insert(v, occurences[0]);
                     for pair in occurences.windows(2) {
                         var_eqs.push((pair[0], pair[1]))
                     }
                 }
 
-                Expr::Scan {
-                    relation: (atom.symbol, atom.arity),
+                let expr = Expr::Scan {
+                    relation: (atom.symbol.clone(), atom.arity),
                     var_eqs,
                     term_eqs,
-                }
+                };
+                (var_map, expr)
             }
-            _ => {
-                let my_vars = self.vars.clone();
-                let (q1, q2) = self.split();
-                let (key1, key2): (Vec<usize>, Vec<usize>) = q1
-                    .vars
+            Tree::Node(_, _, tree1, tree2) => {
+                let (v1, e1) = self.compile_rec(tree1);
+                let (v2, e2) = self.compile_rec(tree2);
+                let (key1, key2): (Vec<usize>, Vec<usize>) = v1
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i1, v)| q2.index_of(v).map(|i2| (i1, i2)))
+                    .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
                     .unzip();
 
-                let merge: Vec<Sided> = my_vars
-                    .into_iter()
-                    .map(|v| {
-                        if let Some(i) = q1.index_of(&v) {
-                            Sided::left(i)
-                        } else if let Some(i) = q2.index_of(&v) {
-                            Sided::right(i)
-                        } else {
-                            unreachable!("var has to come from one side")
-                        }
-                    })
-                    .collect();
+                let mut var_map = VarMap::default();
+                let mut merge: Vec<Sided> = vec![];
+                for (v, i) in v1.iter() {
+                    var_map.insert(v.clone(), merge.len());
+                    merge.push(Sided::left(*i));
+                }
+                for (v, i) in v2.iter() {
+                    if !v1.contains_key(v) {
+                        var_map.insert(v.clone(), merge.len());
+                        merge.push(Sided::right(*i));
+                    }
+                }
 
-                Expr::Join {
+                let expr = Expr::Join {
                     left: Keyed {
                         key: key1,
-                        expr: Box::new(q1.compile()),
+                        expr: Box::new(e1),
                     },
                     right: Keyed {
                         key: key2,
-                        expr: Box::new(q2.compile()),
+                        expr: Box::new(e2),
                     },
                     merge,
-                }
+                };
+                (var_map, expr)
             }
+        }
+    }
+}
+
+struct UnionFind {
+    parent: Vec<usize>,
+    tree: Vec<Rc<Tree>>,
+}
+
+#[derive(Debug, Clone)]
+enum Tree<T = ()> {
+    Leaf(T, usize),
+    Node(T, usize, Rc<Tree<T>>, Rc<Tree<T>>),
+}
+
+impl Tree {
+    fn depth(&self) -> usize {
+        match self {
+            Tree::Leaf(_, _) => 1,
+            Tree::Node(_, depth, _, _) => *depth,
+        }
+    }
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            tree: (0..n).map(|i| Rc::new(Tree::Leaf((), i))).collect(),
+        }
+    }
+
+    fn find(&self, mut i: usize) -> usize {
+        while i != self.parent[i] {
+            i = self.parent[i];
+        }
+        i
+    }
+
+    fn union(&mut self, i: usize, j: usize) -> bool {
+        let i = self.find(i);
+        let j = self.find(j);
+        if i == j {
+            false
+        } else {
+            let i_depth = self.tree[i].depth();
+            let j_depth = self.tree[j].depth();
+            let new_tree = Rc::new(Tree::Node(
+                (),
+                i_depth.max(j_depth) + 1,
+                self.tree[i].clone(),
+                self.tree[j].clone(),
+            ));
+            if i_depth < j_depth {
+                self.parent[i] = j;
+                self.tree[j] = new_tree
+            } else {
+                self.parent[j] = i;
+                self.tree[i] = new_tree;
+            }
+            true
         }
     }
 }
