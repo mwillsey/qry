@@ -61,7 +61,7 @@ impl<V: Clone, S, T> Atom<V, S, T> {
     pub fn vars(&self) -> impl Iterator<Item = V> + '_ {
         self.terms.iter().filter_map(|t| match t {
             Term::Variable(v) => Some(v.clone()),
-            Term::Constant(_) => None,
+            _ => None,
         })
     }
 }
@@ -148,13 +148,13 @@ where
                     .filter_map(|(i1, v)| q2.index_of(v).map(|i2| (i1, i2)))
                     .unzip();
 
-                let merge: Vec<Sided<usize>> = my_vars
+                let merge: Vec<Sided> = my_vars
                     .into_iter()
                     .map(|v| {
                         if let Some(i) = q1.index_of(&v) {
-                            Sided::Left(i)
+                            Sided::left(i)
                         } else if let Some(i) = q2.index_of(&v) {
-                            Sided::Right(i)
+                            Sided::right(i)
                         } else {
                             unreachable!("var has to come from one side")
                         }

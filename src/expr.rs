@@ -3,22 +3,25 @@ use std::rc::Rc;
 use crate::*;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
-pub enum Sided<T> {
-    Left(T),
-    Right(T),
-}
+pub struct Sided(bool, u32);
 
-impl Sided<usize> {
-    fn choose<T: Data>(&self, left: &[T], right: &[T]) -> T {
-        match self {
-            Sided::Left(i) => left[*i].clone(),
-            Sided::Right(i) => right[*i].clone(),
-        }
+impl Sided {
+    pub fn left(i: usize) -> Self {
+        Self(false, i as _)
+    }
+    pub fn right(i: usize) -> Self {
+        Self(true, i as _)
+    }
+    #[inline(always)]
+    fn choose<T: Data>(self, left: &[T], right: &[T]) -> T {
+        let side = if self.0 { right } else { left };
+        // unsafe { side.get_unchecked(self.1 as usize) }.clone()
+        side[self.1 as usize].clone()
     }
 }
 
 pub type Key = Vec<usize>;
-pub type Key2 = Vec<Sided<usize>>;
+pub type Key2 = Vec<Sided>;
 
 type MapData1<T> = FxHashMap<T, Vec<T>>;
 type MapData2<T> = FxHashMap<[T; 2], Vec<T>>;
@@ -44,15 +47,13 @@ fn pick<T: Clone>(key: &[usize], tuple: &[T]) -> Vec<T> {
     key.iter().map(|&i| tuple[i].clone()).collect()
 }
 
-fn merge_pick<'a, T: Clone>(
-    merge: &'a [Sided<usize>],
+#[inline(always)]
+fn merge_pick<'a, T: Data>(
+    merge: &'a [Sided],
     left: &'a [T],
     right: &'a [T],
 ) -> impl Iterator<Item = T> + 'a {
-    merge.iter().map(move |side| match side {
-        Sided::Left(i) => left[*i].clone(),
-        Sided::Right(i) => right[*i].clone(),
-    })
+    merge.iter().map(move |side| side.choose(left, right))
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -71,7 +72,7 @@ pub enum Expr<S, T> {
     Join {
         left: Keyed<S, T>,
         right: Keyed<S, T>,
-        merge: Vec<Sided<usize>>,
+        merge: Vec<Sided>,
     },
 }
 
@@ -99,35 +100,28 @@ where
     T: Data,
     F: FnMut(&[T], &[T]),
 {
-    let mut cross = |tups1: &[T], tups2: &[T]| {
-        if tups1.len() <= tups2.len() {
-            for tup1 in tups1.chunks_exact(left.arity) {
-                for tup2 in tups2.chunks_exact(right.arity) {
+    macro_rules! cross {
+        ($tups1:ident, $tups2:ident) => {{
+            for tup1 in $tups1.chunks_exact(left.arity) {
+                for tup2 in $tups2.chunks_exact(right.arity) {
                     f(tup1, tup2)
                 }
             }
-        } else {
-            for tup2 in tups2.chunks_exact(right.arity) {
-                for tup1 in tups1.chunks_exact(left.arity) {
-                    f(tup1, tup2)
-                }
-            }
-        }
+        }};
     };
 
-    macro_rules! inner {
-        ($l:expr, $r:expr) => {{
-            let (l, r) = ($l, $r);
-            if l.len() <= r.len() {
-                for (k, ll) in l {
-                    if let Some(rr) = r.get(k) {
-                        cross(ll, rr)
+    macro_rules! join {
+        ($l:ident, $r:ident) => {{
+            if $l.len() <= $r.len() {
+                for (k, ll) in $l {
+                    if let Some(rr) = $r.get(k) {
+                        cross!(ll, rr)
                     }
                 }
             } else {
-                for (k, rr) in r {
-                    if let Some(ll) = l.get(k) {
-                        cross(ll, rr)
+                for (k, rr) in $r {
+                    if let Some(ll) = $l.get(k) {
+                        cross!(ll, rr)
                     }
                 }
             }
@@ -135,11 +129,11 @@ where
     }
 
     match (&left.data, &right.data) {
-        (KeyedMapKind::A0(l), KeyedMapKind::A0(r)) => cross(l, r),
-        (KeyedMapKind::A1(l), KeyedMapKind::A1(r)) => inner!(l, r),
-        (KeyedMapKind::A2(l), KeyedMapKind::A2(r)) => inner!(l, r),
-        (KeyedMapKind::A3(l), KeyedMapKind::A3(r)) => inner!(l, r),
-        (KeyedMapKind::Vec(l), KeyedMapKind::Vec(r)) => inner!(l, r),
+        (KeyedMapKind::A0(l), KeyedMapKind::A0(r)) => cross!(l, r),
+        (KeyedMapKind::A1(l), KeyedMapKind::A1(r)) => join!(l, r),
+        (KeyedMapKind::A2(l), KeyedMapKind::A2(r)) => join!(l, r),
+        (KeyedMapKind::A3(l), KeyedMapKind::A3(r)) => join!(l, r),
+        (KeyedMapKind::Vec(l), KeyedMapKind::Vec(r)) => join!(l, r),
         _ => panic!("{:?}\n{:?}", left, right),
     }
 }
@@ -215,6 +209,7 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
             }
             Expr::Join { left, right, merge } => {
                 assert_eq!(left.key.len(), right.key.len());
+
                 let left = if let Some(hit) = ctx.cache.get(left) {
                     // println!("hit {:?}", left);
                     Rc::clone(hit)
@@ -365,10 +360,8 @@ mod tests {
         db.add_relation_with_data("s", 2, s.concat());
         db.add_relation_with_data("t", 2, t.concat());
 
-        use Sided::*;
-
         let q1 = Expr::Join {
-            merge: vec![Right(0), Right(1), Right(2)],
+            merge: vec![Sided::right(0), Sided::right(1), Sided::right(2)],
             left: Keyed {
                 key: vec![0, 1],
                 expr: Box::new(Expr::new_scan("r", 2)),
@@ -376,7 +369,7 @@ mod tests {
             right: Keyed {
                 key: vec![0, 1],
                 expr: Box::new(Expr::Join {
-                    merge: vec![Right(1), Left(0), Left(1)],
+                    merge: vec![Sided::right(1), Sided::left(0), Sided::left(1)],
                     left: Keyed {
                         key: vec![1],
                         expr: Box::new(Expr::new_scan("s", 2)),
