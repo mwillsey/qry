@@ -91,46 +91,11 @@ where
     T: Data + 'static,
 {
     pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
-        assert!(!self.atoms.is_empty());
+        let na = self.atoms.len();
+        assert_ne!(na, 0);
 
-        let mut by_var: FxHashMap<V, FxHashSet<usize>> = Default::default();
-        for (i, atom) in self.atoms.iter().enumerate() {
-            for var in atom.vars() {
-                by_var.entry(var.clone()).or_default().insert(i);
-            }
-        }
-
-        // Use Kruskal's algorithm to find a max spanning tree
-        let mut edges = vec![];
-        let mut nodes = self.atoms.iter().enumerate();
-        while let Some((i, atom1)) = nodes.next() {
-            let vars1: FxHashSet<V> = atom1.vars().collect();
-            for (j, atom2) in nodes.clone() {
-                assert!(i < j);
-                let weight = atom2.vars().filter(|v2| vars1.contains(v2)).count();
-                edges.push((weight, i, j));
-            }
-        }
-        edges.sort();
-
-        let n = self.atoms.len();
-        let mut uf = UnionFind::new(n);
-
-        for (_weight, i, j) in edges.iter().cloned().rev() {
-            uf.union(i, j);
-        }
-
-        // everything is in the same set
-        debug_assert!((0..n - 1).all(|i| uf.find(i) == uf.find(i + 1)));
-
-        let tree = &uf.tree[uf.find(0)];
-        self.compile_rec(tree)
-    }
-
-    fn compile_rec(&self, tree: &Tree) -> (VarMap<V>, Expr<S, T>) {
-        match tree {
-            Tree::Leaf((), i) => {
-                let atom = &self.atoms[*i];
+        let mut exprs: Vec<(usize, usize, VarMap<V>, Expr<S, T>)> = self.atoms.iter()
+            .map(|atom| {
                 let mut used_vars: FxHashMap<V, Vec<usize>> = Default::default();
                 let mut term_eqs: Vec<(T, usize)> = vec![];
                 for (i, term) in atom.terms.iter().enumerate() {
@@ -149,108 +114,69 @@ where
                     }
                 }
 
+                let n_filters = var_eqs.len() + term_eqs.len();
                 let expr = Expr::Scan {
                     relation: (atom.symbol.clone(), atom.arity),
                     var_eqs,
                     term_eqs,
                 };
-                (var_map, expr)
-            }
-            Tree::Node(_, _, tree1, tree2) => {
-                let (v1, e1) = self.compile_rec(tree1);
-                let (v2, e2) = self.compile_rec(tree2);
-                let (key1, key2): (Vec<usize>, Vec<usize>) = v1
-                    .iter()
-                    .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
-                    .unzip();
+                (1, n_filters, var_map, expr)
+            })
+            .collect();
 
-                let mut var_map = VarMap::default();
-                let mut merge: Vec<Sided> = vec![];
-                for (v, i) in v1.iter() {
-                    var_map.insert(v.clone(), merge.len());
-                    merge.push(Sided::left(*i));
-                }
-                for (v, i) in v2.iter() {
-                    if !v1.contains_key(v) {
+        while exprs.len() > 1 {
+            let mut proposals = vec![];
+            let mut iter = exprs.iter().enumerate();
+            while let Some((i1, (d1, nf1, v1, _e1))) = iter.next() {
+                for (i2, (d2, nf2, v2, _e2)) in iter.clone() {
+                    let nf = nf1 + nf2;
+                    let mut score = 0;
+                    let mut var_map = VarMap::default();
+                    let mut merge: Vec<Sided> = vec![];
+                    for (v, i) in v1.iter() {
                         var_map.insert(v.clone(), merge.len());
-                        merge.push(Sided::right(*i));
+                        merge.push(Sided::left(*i));
                     }
+                    for (v, i) in v2.iter() {
+                        if !v1.contains_key(v) {
+                            var_map.insert(v.clone(), merge.len());
+                            merge.push(Sided::right(*i));
+                        } else {
+                            score += 1;
+                        }
+                    }
+                    proposals.push(((d1.max(d2) + 1, score, nf), var_map, merge, (i1, i2)));
                 }
-
-                let expr = Expr::Join {
-                    left: Keyed {
-                        key: key1,
-                        expr: Box::new(e1),
-                    },
-                    right: Keyed {
-                        key: key2,
-                        expr: Box::new(e2),
-                    },
-                    merge,
-                };
-                (var_map, expr)
             }
+            let ((depth, score, nf), var_map, merge, (i1, i2)) = proposals.iter().max_by_key(|p| p.0).unwrap().clone();
+            dbg!(score, nf);
+            assert!(i1 < i2);
+            // must remove i2 first to not mess up index
+            let (_, nf1, v2, e2) = exprs.remove(i2);
+            let (_, nf2, v1, e1) = exprs.remove(i1);
+            let (key1, key2): (Vec<usize>, Vec<usize>) = v1
+                .iter()
+                .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
+                .unzip();
+            assert_eq!(score, key1.len());
+            let expr = Expr::Join {
+                left: Keyed {
+                    key: key1,
+                    expr: Box::new(e1),
+                },
+                right: Keyed {
+                    key: key2,
+                    expr: Box::new(e2),
+                },
+                merge,
+            };
+            exprs.push((depth, nf, var_map, expr));
         }
-    }
-}
 
-struct UnionFind {
-    parent: Vec<usize>,
-    tree: Vec<Rc<Tree>>,
-}
+        println!("Compiled");
 
-#[derive(Debug, Clone)]
-enum Tree<T = ()> {
-    Leaf(T, usize),
-    Node(T, usize, Rc<Tree<T>>, Rc<Tree<T>>),
-}
-
-impl Tree {
-    fn depth(&self) -> usize {
-        match self {
-            Tree::Leaf(_, _) => 1,
-            Tree::Node(_, depth, _, _) => *depth,
-        }
-    }
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-            tree: (0..n).map(|i| Rc::new(Tree::Leaf((), i))).collect(),
-        }
-    }
-
-    fn find(&self, mut i: usize) -> usize {
-        while i != self.parent[i] {
-            i = self.parent[i];
-        }
-        i
-    }
-
-    fn union(&mut self, i: usize, j: usize) -> bool {
-        let i = self.find(i);
-        let j = self.find(j);
-        if i == j {
-            false
-        } else {
-            let i_depth = self.tree[i].depth();
-            let j_depth = self.tree[j].depth();
-            let new_tree = Rc::new(Tree::Node(
-                (),
-                i_depth.max(j_depth) + 1,
-                self.tree[i].clone(),
-                self.tree[j].clone(),
-            ));
-            if i_depth < j_depth {
-                self.parent[i] = j;
-                self.tree[j] = new_tree
-            } else {
-                self.parent[j] = i;
-                self.tree[i] = new_tree;
-            }
-            true
-        }
+        assert_eq!(exprs.len(), 1);
+        let (_, _nf, varmap, expr) = exprs.pop().unwrap();
+        (varmap, expr)
     }
 }
