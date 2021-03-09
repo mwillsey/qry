@@ -23,10 +23,10 @@ impl Sided {
 pub type Key = Vec<usize>;
 pub type Key2 = Vec<Sided>;
 
-type MapData1<T> = FxHashMap<T, Vec<T>>;
-type MapData2<T> = FxHashMap<[T; 2], Vec<T>>;
-type MapData3<T> = FxHashMap<[T; 3], Vec<T>>;
-type MapDataN<T> = FxHashMap<Vec<T>, Vec<T>>;
+type MapData1<T> = HashMap<T, Vec<T>>;
+type MapData2<T> = HashMap<[T; 2], Vec<T>>;
+type MapData3<T> = HashMap<[T; 3], Vec<T>>;
+type MapDataN<T> = HashMap<Vec<T>, Vec<T>>;
 
 #[derive(Debug, Clone)]
 enum KeyedMapKind<T> {
@@ -77,17 +77,17 @@ pub enum Expr<S, T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct EvalContext<S, T> {
-    cache: FxHashMap<Keyed<S, T>, Rc<KeyedMap<T>>>,
+pub struct HashEvalContext<S, T> {
+    cache: HashMap<Keyed<S, T>, Rc<KeyedMap<T>>>,
 }
 
-impl<S, T> EvalContext<S, T> {
+impl<S, T> HashEvalContext<S, T> {
     pub fn clear(&mut self) {
         self.cache.clear()
     }
 }
 
-impl<S, T> Default for EvalContext<S, T> {
+impl<S, T> Default for HashEvalContext<S, T> {
     fn default() -> Self {
         Self {
             cache: Default::default(),
@@ -150,7 +150,7 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
         &self,
         key: &[usize],
         db: &Database<S, T>,
-        ctx: &mut EvalContext<S, T>,
+        ctx: &mut HashEvalContext<S, T>,
     ) -> KeyedMap<T> {
         match self {
             Expr::Scan {
@@ -277,7 +277,7 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
         }
     }
 
-    pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, f: F)
+    pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut HashEvalContext<S, T>, f: F)
     where
         F: FnMut(&[T]),
     {
@@ -289,9 +289,16 @@ impl<S: RelationSymbol, T: Data> Expr<S, T> {
         }
     }
 
-    pub fn collect(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, picker: &[usize]) -> Vec<Vec<T>> {
+    pub fn collect(
+        &self,
+        db: &Database<S, T>,
+        ctx: &mut HashEvalContext<S, T>,
+        picker: &[usize],
+    ) -> Vec<Vec<T>> {
         let mut v = vec![];
-        self.for_each(db, ctx, |tup| v.push(picker.iter().map(|i| tup[*i].clone()).collect()));
+        self.for_each(db, ctx, |tup| {
+            v.push(picker.iter().map(|i| tup[*i].clone()).collect())
+        });
         v
     }
 
@@ -324,105 +331,109 @@ mod tests {
         .compile();
 
         let picker = &[varmap[&0], varmap[&1], varmap[&2], varmap[&3]];
-        let result = q.collect(&db, &mut EvalContext::default(), picker);
+        let result = q.collect(&db, &mut HashEvalContext::default(), picker);
         assert_eq!(result, vec![vec![10, 20, 30, 40]]);
     }
 
-    // #[test]
-    // fn triangle() {
-    //     let mut db = Database::<&'static str, i32>::default();
+    #[test]
+    fn triangle() {
+        let mut db = Database::<&'static str, i32>::default();
 
-    //     // R(0,1) S(1,2) T(2, 0)
+        // R(0,1) S(1,2) T(2, 0)
 
-    //     let mut r = vec![];
-    //     let mut s = vec![];
-    //     let mut t = vec![];
+        let mut r = vec![];
+        let mut s = vec![];
+        let mut t = vec![];
 
-    //     let mut triangles = vec![vec![100, 200, 300]];
+        let mut triangles = vec![vec![100, 200, 300]];
 
-    //     triangles.sort();
-    //     triangles.dedup();
+        triangles.sort();
+        triangles.dedup();
 
-    //     for tri in &triangles {
-    //         let (a, b, c) = (tri[0], tri[1], tri[2]);
-    //         r.push(vec![a, b]);
-    //         s.push(vec![b, c]);
-    //         t.push(vec![c, a]);
-    //     }
+        for tri in &triangles {
+            let (a, b, c) = (tri[0], tri[1], tri[2]);
+            r.push(vec![a, b]);
+            s.push(vec![b, c]);
+            t.push(vec![c, a]);
+        }
 
-    //     // add some junk
-    //     let junk = if cfg!(debug_assertions) { 10 } else { 10000 };
-    //     for i in 0..junk {
-    //         let j = i + 1;
-    //         r.push(vec![i, j]);
-    //         s.push(vec![i, j]);
-    //         t.push(vec![i, j]);
-    //     }
+        // add some junk
+        let junk = if cfg!(debug_assertions) { 10 } else { 10000 };
+        for i in 0..junk {
+            let j = i + 1;
+            r.push(vec![i, j]);
+            s.push(vec![i, j]);
+            t.push(vec![i, j]);
+        }
 
-    //     r.sort();
-    //     r.dedup();
-    //     s.sort();
-    //     s.dedup();
-    //     t.sort();
-    //     t.dedup();
+        r.sort();
+        r.dedup();
+        s.sort();
+        s.dedup();
+        t.sort();
+        t.dedup();
 
-    //     db.add_relation_with_data("r", 2, r.concat());
-    //     db.add_relation_with_data("s", 2, s.concat());
-    //     db.add_relation_with_data("t", 2, t.concat());
+        db.add_relation_with_data("r", 2, r.concat());
+        db.add_relation_with_data("s", 2, s.concat());
+        db.add_relation_with_data("t", 2, t.concat());
 
-    //     let q1 = Expr::Join {
-    //         merge: vec![Sided::right(0), Sided::right(1), Sided::right(2)],
-    //         left: Keyed {
-    //             key: vec![0, 1],
-    //             expr: Box::new(Expr::new_scan("r", 2)),
-    //         },
-    //         right: Keyed {
-    //             key: vec![0, 1],
-    //             expr: Box::new(Expr::Join {
-    //                 merge: vec![Sided::right(1), Sided::left(0), Sided::left(1)],
-    //                 left: Keyed {
-    //                     key: vec![1],
-    //                     expr: Box::new(Expr::new_scan("s", 2)),
-    //                 },
-    //                 right: Keyed {
-    //                     key: vec![0],
-    //                     expr: Box::new(Expr::new_scan("t", 2)),
-    //                 },
-    //             }),
-    //         },
-    //     };
+        // let q1 = Expr::Join {
+        //     merge: vec![Sided::right(0), Sided::right(1), Sided::right(2)],
+        //     left: Keyed {
+        //         key: vec![0, 1],
+        //         expr: Box::new(Expr::new_scan("r", 2)),
+        //     },
+        //     right: Keyed {
+        //         key: vec![0, 1],
+        //         expr: Box::new(Expr::Join {
+        //             merge: vec![Sided::right(1), Sided::left(0), Sided::left(1)],
+        //             left: Keyed {
+        //                 key: vec![1],
+        //                 expr: Box::new(Expr::new_scan("s", 2)),
+        //             },
+        //             right: Keyed {
+        //                 key: vec![0],
+        //                 expr: Box::new(Expr::new_scan("t", 2)),
+        //             },
+        //         }),
+        //     },
+        // };
 
-    //     let q2 = Query::<_, _, i32>::new(vec![
-    //         Atom::new("r", vec![V(0), V(1)]),
-    //         Atom::new("s", vec![V(1), V(2)]),
-    //         Atom::new("t", vec![V(2), V(0)]),
-    //     ])
-    //     .compile()
-    //     .1;
+        let q2 = Query::<_, _, i32>::new(vec![
+            Atom::new("r", vec![V(0), V(1)]),
+            Atom::new("s", vec![V(1), V(2)]),
+            Atom::new("t", vec![V(2), V(0)]),
+        ]);
+        // .compile()
+        // .1;
 
-    //     let n = 300;
-    //     let test = |q: Expr<_, _>| {
-    //         let (mut results, times): (Vec<_>, Vec<_>) = std::iter::repeat_with(|| {
-    //             let start = std::time::Instant::now();
-    //             (q.collect(&db, &mut EvalContext::default()), start.elapsed())
-    //         })
-    //         .take(n)
-    //         .unzip();
-    //         println!("min time: {:?}", times.iter().min().unwrap());
-    //         let mut result = results.pop().unwrap();
-    //         result.sort();
-    //         result.dedup();
-    //         result
-    //     };
+        let mut results = vec![];
+        let varmap = q2.vars(&db);
+        q2.join(&varmap, &db, |x| results.push(x.to_vec()));
 
-    //     // println!("{:?}", Expression::<DB>::into_dyn(q1.clone()));
+        // let n = 300;
+        // let test = |q: Expr<_, _>| {
+        //     let (mut results, times): (Vec<_>, Vec<_>) = std::iter::repeat_with(|| {
+        //         let start = std::time::Instant::now();
+        //         (q.collect(&db, &mut EvalContext::default()), start.elapsed())
+        //     })
+        //     .take(n)
+        //     .unzip();
+        //     println!("min time: {:?}", times.iter().min().unwrap());
+        //     let mut result = results.pop().unwrap();
+        //     result.sort();
+        //     result.dedup();
+        //     result
+        // };
 
-    //     let result1 = test(q1);
-    //     let result2 = test(q2);
+        // println!("{:?}", Expression::<DB>::into_dyn(q1.clone()));
 
-    //     assert_eq!(result1, triangles);
-    //     assert_eq!(result2, triangles);
-    // }
+        // let result1 = test(q1);
+        // let result2 = test(q2);
+
+        assert_eq!(results, triangles);
+        // assert_eq!(result2, triangles);
+    }
 
     // #[test]
     // fn linear() {
