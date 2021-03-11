@@ -409,7 +409,8 @@ mod tests {
 
         let mut results = vec![];
         let varmap = q2.vars(&db);
-        q2.join(&varmap, &db, |x| results.push(x.to_vec()));
+        let mut ctx = EvalContext::default();
+        q2.join(&varmap, &db, &mut ctx, |x| results.push(x.to_vec()));
 
         // let n = 300;
         // let test = |q: Expr<_, _>| {

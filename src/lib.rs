@@ -5,6 +5,8 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 mod expr;
 pub use expr::*;
 
+mod util;
+
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
@@ -237,18 +239,17 @@ impl<T: Data> Trie<T> {
     }
 }
 
-    // pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, f: F)
-    // where
-    //     F: FnMut(&[T]),
-    // {
-    //     let key = &[];
-    //     let map = self.eval(key, db, ctx);
-    //     match map.data {
-    //         KeyedMapKind::A0(data) => data.chunks_exact(self.arity()).for_each(f),
-    //         _ => unreachable!(),
-    //     }
-    // }
-
+// pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, f: F)
+// where
+//     F: FnMut(&[T]),
+// {
+//     let key = &[];
+//     let map = self.eval(key, db, ctx);
+//     match map.data {
+//         KeyedMapKind::A0(data) => data.chunks_exact(self.arity()).for_each(f),
+//         _ => unreachable!(),
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T> {
@@ -276,10 +277,7 @@ where
     T: Data,
 {
     pub fn vars(&self, _db: &Database<S, T>) -> VarMap<V> {
-        let mut vars: Vec<_> = self
-            .by_var
-            .iter()
-            .collect();
+        let mut vars: Vec<_> = self.by_var.iter().collect();
 
         vars.sort_by_key(|(_v, occ)| occ.len());
 
@@ -290,8 +288,13 @@ where
             .collect()
     }
 
-    pub fn join<F>(&self, varmap: &VarMap<V>, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, mut f: F)
-    where
+    pub fn join<F>(
+        &self,
+        varmap: &VarMap<V>,
+        db: &Database<S, T>,
+        ctx: &mut EvalContext<S, T>,
+        mut f: F,
+    ) where
         F: FnMut(&[T]),
     {
         let mut vars: Vec<_> = self
@@ -302,30 +305,37 @@ where
 
         vars.sort_by_key(|x| varmap[&x.0]);
 
-        let tries = self.atoms.iter().map(|atom| {
-            let mut shuffle = vec![];
-            for (var, _) in &vars {
-                for (i, term) in atom.terms.iter().enumerate() {
-                    if let Term::Variable(v) = term {
-                        if var == v && !shuffle.contains(&i) {
-                            shuffle.push(i);
+        let tries = self
+            .atoms
+            .iter()
+            .map(|atom| {
+                let mut shuffle = vec![];
+                for (var, _) in &vars {
+                    for (i, term) in atom.terms.iter().enumerate() {
+                        if let Term::Variable(v) = term {
+                            if var == v && !shuffle.contains(&i) {
+                                shuffle.push(i);
+                            }
                         }
                     }
                 }
-            }
 
-            let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-            let trie = ctx.cache.entry(key).or_insert_with_key(|(_sym, _arity_, shuffle)| {
-                let mut trie = Trie::default();
-                for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-                    trie.insert(&shuffle, tuple);
-                }
-                Rc::new(trie)
-            });
+                let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
+                let trie = ctx
+                    .cache
+                    .entry(key)
+                    .or_insert_with_key(|(_sym, _arity_, shuffle)| {
+                        let mut trie = Trie::default();
+                        for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
+                            trie.insert(&shuffle, tuple);
+                        }
+                        Rc::new(trie)
+                    });
 
-            // println!("{:?} {:?}", atom.symbol, &shuffle);
-            trie.clone()
-        }).collect::<Vec<_>>();
+                // println!("{:?} {:?}", atom.symbol, &shuffle);
+                trie.clone()
+            })
+            .collect::<Vec<_>>();
 
         let tries: Vec<&Trie<T>> = tries.iter().map(|t| t.as_ref()).collect();
 

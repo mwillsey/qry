@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 rustc-hash = "1"
+bumpalo = { version = "3", features = ["collections"] }
