@@ -409,11 +409,7 @@ mod tests {
 
         let mut results = vec![];
         // let varmap = q2.vars(&db);
-        let varmap = vec![
-            (0, 0),
-            (1, 1),
-            (2, 2)
-        ].into_iter().collect();
+        let varmap = vec![(0, 0), (1, 1), (2, 2)].into_iter().collect();
         let mut ctx = EvalContext::default();
         q2.join(&varmap, &db, &mut ctx, |x| results.push(x.to_vec()));
 

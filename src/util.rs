@@ -76,7 +76,10 @@ where
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &K> {
-        self.spots.iter().filter_map(|x| x.as_ref()).map(|tup| &tup.0)
+        self.spots
+            .iter()
+            .filter_map(|x| x.as_ref())
+            .map(|tup| &tup.0)
     }
 
     pub fn get(&self, k: &K) -> Option<&V> {
@@ -121,15 +124,15 @@ where
                 self.set(spot, k, V::default())
             }
         })
-
     }
 
-    fn probe_mut(&mut self, k: &K) -> Result<&mut V, &mut Option<(K, V)>> {
-        match self.probe(k) {
-            Ok(v) => Ok(unsafe { &mut *(v as *const V as *mut V) }),
-            Err(spot) => Ok(unsafe { &mut *(spot as *const _ as *mut _) }),
-        }
-    }
+    // TODO: comment out for now since it's preventing clippy from passing
+    // fn probe_mut(&mut self, k: &K) -> Result<&mut V, &mut Option<(K, V)>> {
+    //     match self.probe(k) {
+    //         Ok(v) => Ok(unsafe { &mut *(v as *const V as *mut V) }),
+    //         Err(spot) => Ok(unsafe { &mut *(spot as *const _ as *mut _) }),
+    //     }
+    // }
 
     fn probe(&self, k: &K) -> Result<&V, &Option<(K, V)>> {
         let cap = self.capacity();
