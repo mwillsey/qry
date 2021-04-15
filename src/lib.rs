@@ -184,7 +184,7 @@ where
             }
             let ((depth, score, nf), var_map, merge, (i1, i2)) =
                 proposals.iter().max_by_key(|p| p.0).unwrap().clone();
-            dbg!(score, nf);
+            // dbg!(score, nf);
             assert!(i1 < i2);
             // must remove i2 first to not mess up index
             let (_, nf1, v2, e2) = exprs.remove(i2);
@@ -208,33 +208,55 @@ where
             exprs.push((depth, nf, var_map, expr));
         }
 
-        println!("Compiled");
-
         assert_eq!(exprs.len(), 1);
         let (_, _nf, varmap, expr) = exprs.pop().unwrap();
         (varmap, expr)
     }
 }
 
-// #[derive(Debug, Clone)]
-struct Trie<'bump, T>(BumpHashMap<'bump, T, Self>);
+#[derive(Debug)]
+// struct Trie<'bump, T>(BumpHashMap<'bump, T, Self>);
+struct Trie<T>(HashMap<T, Self>);
 
-impl<'a, T> Default for Trie<'a, T> {
+// impl<'a, T> Default for Trie<'a, T> {
+//     fn default() -> Self {
+//         Self(Default::default())
+//     }
+// }
+impl<T> Default for Trie<T> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-impl<'a, T: Data> Trie<'a, T> {
+// impl<'a, T: Data> Trie<'a, T> {
+//     fn len(&self) -> usize {
+//         self.0.len()
+//     }
+
+//     fn insert(&mut self, bump: &'a Bump, shuffle: &[usize], tuple: &[T]) {
+//         debug_assert_eq!(shuffle.len(), tuple.len());
+//         let mut trie = self;
+//         for i in shuffle {
+//             trie = trie.0.get_or_default(tuple[*i].clone(), bump);
+//         }
+//     }
+// }
+
+impl<T: Data> Trie<T> {
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    fn insert(&mut self, bump: &'a Bump, shuffle: &[usize], tuple: &[T]) {
-        debug_assert_eq!(shuffle.len(), tuple.len());
+    fn insert(&mut self, shuffle: &[usize], tuple: &[T]) {
+        // The two are usually equal. However, when same vars 
+        // occur in different places in a relation,
+        // like R(x, x), shuffle.len() should be less than the tuple.len()
+        debug_assert!(shuffle.len() <= tuple.len());
+        // debug_assert_eq!(shuffle.len(), tuple.len());
         let mut trie = self;
         for i in shuffle {
-            trie = trie.0.get_or_default(tuple[*i].clone(), bump);
+            trie = trie.0.entry(tuple[*i].clone()).or_default();
         }
     }
 }
@@ -292,7 +314,7 @@ where
             let biggest = vars.iter().max_by_key(|(_v, counts)| *counts);
             let v = match biggest {
                 Some((v, _counts)) => v.clone(),
-                None => break
+                None => break,
             };
 
             vars.remove(&v);
@@ -310,25 +332,6 @@ where
             }
         }
         varmap
-
-
-        // while !vars.is_empty() {
-        //     let
-        // }
-
-        // let mut vars: Vec<_> = vars.into_iter().collect();
-        // vars.sort_by_key(|(_v, occ)| *occ);
-
-        // // let mut vars: Vec<_> = self.by_var.iter().collect();
-        // vars.sort_by_key(|(_v, occ)| occ.len());
-
-        // println!("{:?}", vars);
-
-        // vars.into_iter()
-        //     .rev()
-        //     .enumerate()
-        //     .map(|(i, (v, _occ))| (v.clone(), i))
-        //     .collect()
     }
 
     pub fn join<F>(
@@ -353,11 +356,21 @@ where
         let mut tries = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
+            let mut constraint = vec![];
             for (var, _) in &vars {
+                let mut found_var = None;
                 for (i, term) in atom.terms.iter().enumerate() {
                     if let Term::Variable(v) = term {
                         if var == v && !shuffle.contains(&i) {
-                            shuffle.push(i);
+                            match found_var {
+                                None => {
+                                    found_var = Some(i);
+                                    shuffle.push(i);
+                                },
+                                Some(j) => {
+                                    constraint.push((i, j));
+                                }
+                            }
                         }
                     }
                 }
@@ -365,105 +378,225 @@ where
             assert!(shuffle.len() <= atom.terms.len());
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-            // let trie = ctx
-            //     .cache
-            //     .entry(key)
-            //     .or_insert_with_key(|(_sym, _arity_, shuffle)| {
-            //         let mut trie = Trie::default();
-            //         for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-            //             trie.insert(&bump, &shuffle, tuple);
-            //         }
-            //         Rc::new(trie)
-            //     });
             let mut trie = Trie::default();
             for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-                trie.insert(&bump, &shuffle, tuple);
+                if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
+                    trie.insert(&shuffle, tuple);
+                }
             }
 
             tries.push(trie)
-            // Rc::new(trie)
-
-            // println!("{:?} {:?}", atom.symbol, &shuffle);
-            // trie.clone()
         }
 
         let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t).collect();
+        println!("var_map: {:?}", varmap);
+        println!("{:?}", &tries);
 
-        // let mut tuple = vec![T::default(); vars.len()];
         let empty = Trie::default();
         self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty);
     }
 
-    // fn gj_loop<F>(&self, f: &mut F, vars: &[(V, Vec<usize>)], relations: &[&Trie<T>])
-    // where
-    //     F: FnMut(&[T]), {
-    //     let mut tuple = vec![];
-    //     for (var, used) in vars {
-    //     }
-    //     // assert!(tuple.len() < vars.len());
-    // }
+    #[inline]
+    fn gj_impl_base<'a, F>(
+        &self,
+        f: &mut F,
+        tuple: &mut Vec<T>,
+        vars: &[(V, Vec<usize>)],
+        // relations: &mut [&'a Trie<'a, T>],
+        // empty: &'a Trie<'a, T>
+        relations: &mut [&'a Trie<T>],
+        empty: &'a Trie<T>
+    ) where
+        F: FnMut(&[T]),
+    {
+        let pos = tuple.len();
+        assert!(pos < vars.len());
+
+        let (x, js) = &vars[pos];
+        debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
+
+        match js.len() {
+            1 => {
+                let j = js[0];
+    
+                tuple.push(Default::default());
+                for val in relations[j].0.keys() {
+                    tuple[pos] = val.clone();
+                    f(tuple);
+                }
+                tuple.pop();
+            }
+            2 => {
+                let (j_min, j_max) = if relations[js[0]].len() < relations[js[1]].len() {
+                    (js[0], js[1])
+                } else {
+                    (js[1], js[0])
+                };
+                let r = relations[j_min];
+                let rj = relations[j_max];
+                let intersection= r.0.keys().filter(|t| rj.0.contains_key(t));
+    
+                tuple.push(Default::default());
+                for val in intersection {
+                    tuple[pos] = val.clone();
+                    f(tuple);
+                }
+                tuple.pop();
+            }
+            _ => {
+                let j_min = js
+                    .iter()
+                    .copied()
+                    .min_by_key(|j| relations[*j].len())
+                    .unwrap();
+
+                let mut intersection: Vec<T> = relations[j_min].0.keys().cloned().collect();
+        
+                for &j in js {
+                    if j != j_min {
+                        let rj = &relations[j].0;
+                        intersection.retain(|t| rj.contains_key(t));
+                    }
+                }
+
+                let pos = tuple.len();
+                tuple.push(Default::default());
+                for val in intersection {
+                    tuple[pos] = val;
+                    f(tuple);
+                }
+                tuple.pop();
+            }
+        }
+
+        
+    }
+
+    #[inline]
+    fn gj_impl<'a, F, This>(
+        &self,
+        f: &mut F,
+        tuple: &mut Vec<T>,
+        vars: &[(V, Vec<usize>)],
+        // relations: &mut [&'a Trie<'a, T>],
+        // empty: &'a Trie<'a, T>,
+        relations: &mut [&'a Trie<T>],
+        empty: &'a Trie<T>,
+        mut this: This,
+    ) where
+        F: FnMut(&[T]),
+        This: FnMut(
+            &Query<V, S, T>,
+            &mut F,
+            &mut Vec<T>,
+            &[(V, Vec<usize>)],
+            // &mut [&'a Trie<'a, T>],
+            // &'a Trie<'a, T>,
+            &mut [&'a Trie<T>],
+            &'a Trie<T>
+        ),
+    {
+
+        let pos = tuple.len();
+        assert!(pos < vars.len());
+
+        let (x, js) = &vars[pos];
+        debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
+
+        match js.len() {
+            1 => {
+                let j = js[0];
+                let r = relations[j];
+    
+                tuple.push(Default::default());
+                for val in relations[j].0.keys() {
+                    relations[j] = r.0.get(&val).unwrap_or(empty);
+                    tuple[pos] = val.clone();
+                    this(&self, f, tuple, vars, relations, empty);
+                }
+                tuple.pop();
+                relations[j] = r;
+            }
+            2 => {
+                let (j_min, j_max) = if relations[js[0]].len() < relations[js[1]].len() {
+                    (js[0], js[1])
+                } else {
+                    (js[1], js[0])
+                };
+                let r = relations[j_min];
+                let rj = relations[j_max];
+                let intersection= r.0.keys().filter(|t| rj.0.contains_key(t));
+    
+                tuple.push(Default::default());
+                for val in intersection {
+                    relations[j_min] = r.0.get(&val).unwrap_or(empty);
+                    relations[j_max] = rj.0.get(&val).unwrap_or(empty);
+                    tuple[pos] = val.clone();
+                    this(&self, f, tuple, vars, relations, empty);
+                }
+                tuple.pop();
+                relations[j_min] = r;
+                relations[j_max] = rj;
+            }
+            _ => {
+                let j_min = js
+                    .iter()
+                    .copied()
+                    .min_by_key(|j| relations[*j].len())
+                    .unwrap();
+
+                let mut intersection: Vec<T> = relations[j_min].0.keys().cloned().collect();
+        
+                for &j in js {
+                    if j != j_min {
+                        let rj = &relations[j].0;
+                        intersection.retain(|t| rj.contains_key(t));
+                    }
+                }
+        
+                let jrelations: Vec<_> = js.iter().map(|&j| relations[j]).collect();
+                let pos = tuple.len();
+                tuple.push(Default::default());
+                for val in intersection {
+                    for (&j, r) in js.iter().zip(&jrelations) {
+                        let sub_r = r.0.get(&val).unwrap_or(empty);
+                        relations[j] = sub_r;
+                    }
+                    tuple[pos] = val;
+                    this(&self, f, tuple, vars, relations, empty);
+                }
+                tuple.pop();
+                for (&j, r) in js.iter().zip(&jrelations) {
+                    relations[j] = r
+                }
+            }
+        }
+
+        
+    }
 
     fn gj<'a, F>(
         &self,
         f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<'a, T>],
-        empty: &'a Trie<'a, T>,
+        // relations: &mut [&'a Trie<'a, T>],
+        // empty: &'a Trie<'a, T>,
+        relations: &mut [&'a Trie<T>],
+        empty: &'a Trie<T>
     ) where
         F: FnMut(&[T]),
     {
-        assert!(tuple.len() < vars.len());
-
-        let (x, js) = &vars[tuple.len()];
-        debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
-
-        let j_min = js
-            .iter()
-            .copied()
-            .min_by_key(|j| relations[*j].len())
-            .unwrap();
-
-        // let intersection: Vec<T> = relations[j_min]
-        //     .0
-        //     .keys()
-        //     .cloned()
-        //     .filter(|k| js.iter().all(|&j| j == j_min || relations[j].0.contains_key(k)))
-        //     .collect();
-
-        let mut intersection: Vec<T> = relations[j_min].0.keys().cloned().collect();
-        let l = intersection.len();
-
-        for &j in js {
-            if j != j_min {
-                let rj = &relations[j].0;
-                intersection.retain(|t| rj.contains_key(t));
+        let rem = vars.len() - tuple.len() - 1;
+        match rem {
+            0 => {
+                self.gj_impl_base(f, tuple, vars, relations, empty);
             }
-        }
-
-        // if l > 10 {
-        //     println!("{}: {} -> {}", js.len(), l, intersection.len());
-        // }
-
-        if tuple.len() + 1 == vars.len() {
-            for val in intersection {
-                tuple.push(val);
-                f(&tuple);
-                tuple.pop();
-            }
-        } else {
-            let jrelations: Vec<_> = js.iter().map(|&j| relations[j]).collect();
-            for val in intersection {
-                for (&j, r) in js.iter().zip(&jrelations) {
-                    let sub_r = r.0.get(&val).unwrap_or(empty);
-                    relations[j] = sub_r;
-                }
-                tuple.push(val);
-                self.gj(f, tuple, vars, relations, empty);
-                tuple.pop();
-            }
-            for (&j, r) in js.iter().zip(&jrelations) {
-                relations[j] = r
+            _ => {
+                self.gj_impl(f, tuple, vars, relations, empty, 
+                    |query, f, tuple, vars, relations, empty| {
+                    query.gj(f, tuple, vars, relations, empty);
+                })
             }
         }
     }
