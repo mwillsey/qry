@@ -214,20 +214,13 @@ where
     }
 }
 
-// #[derive(Debug)]
 struct Trie<'bump, T>(BumpHashMap<'bump, T, Self>);
-// struct Trie<T>(HashMap<T, Self>);
 
 impl<'a, T> Default for Trie<'a, T> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
-// impl<T> Default for Trie<T> {
-//     fn default() -> Self {
-//         Self(Default::default())
-//     }
-// }
 
 impl<'a, T: Data> Trie<'a, T> {
     fn len(&self) -> usize {
@@ -244,39 +237,8 @@ impl<'a, T: Data> Trie<'a, T> {
     }
 }
 
-// impl<T: Data> Trie<T> {
-//     fn len(&self) -> usize {
-//         self.0.len()
-//     }
-
-//     fn insert(&mut self, shuffle: &[usize], tuple: &[T]) {
-//         // The two are usually equal. However, when same vars
-//         // occur in different places in a relation,
-//         // like R(x, x), shuffle.len() should be less than the tuple.len()
-//         debug_assert!(shuffle.len() <= tuple.len());
-//         // debug_assert_eq!(shuffle.len(), tuple.len());
-//         let mut trie = self;
-//         for i in shuffle {
-//             trie = trie.0.entry(tuple[*i].clone()).or_default();
-//         }
-//     }
-// }
-
-// pub fn for_each<F>(&self, db: &Database<S, T>, ctx: &mut EvalContext<S, T>, f: F)
-// where
-//     F: FnMut(&[T]),
-// {
-//     let key = &[];
-//     let map = self.eval(key, db, ctx);
-//     match map.data {
-//         KeyedMapKind::A0(data) => data.chunks_exact(self.arity()).for_each(f),
-//         _ => unreachable!(),
-//     }
-// }
-
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T> {
-    // cache: HashMap<(S, usize, Vec<usize>), Rc<Trie<T>>>,
     cache: HashMap<(S, usize, Vec<usize>), T>,
 }
 
@@ -402,8 +364,7 @@ where
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Trie<'a, T>],
-        empty: &'a Trie<'a, T>, // relations: &mut [&'a Trie<T>],
-                                // empty: &'a Trie<T>
+        _empty: &'a Trie<'a, T>,
     ) where
         F: FnMut(&[T]),
     {
@@ -473,8 +434,6 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Trie<'a, T>],
         empty: &'a Trie<'a, T>,
-        // relations: &mut [&'a Trie<T>],
-        // empty: &'a Trie<T>,
         mut this: This,
     ) where
         F: FnMut(&[T]),
@@ -485,8 +444,6 @@ where
             &[(V, Vec<usize>)],
             &mut [&'a Trie<'a, T>],
             &'a Trie<'a, T>,
-            // &mut [&'a Trie<T>],
-            // &'a Trie<T>
         ),
     {
         let pos = tuple.len();
@@ -568,8 +525,6 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Trie<'a, T>],
         empty: &'a Trie<'a, T>,
-        // relations: &mut [&'a Trie<T>],
-        // empty: &'a Trie<T>
     ) where
         F: FnMut(&[T]),
     {
