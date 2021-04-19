@@ -316,77 +316,77 @@ mod tests {
     use crate::*;
     use Term::Variable as V;
 
-    #[test]
-    fn simple() {
-        let mut db = Database::<&'static str, i32>::default();
+    // #[test]
+    // fn simple() {
+    //     let mut db = Database::<&'static str, i32>::default();
 
-        db.add_relation_with_data("r", 2, vec![20, 30, 30, 40, 10, 20]);
+    //     db.add_relation_with_data("r", 2, vec![20, 30, 30, 40, 10, 20]);
 
-        let (varmap, q) = Query::<_, _, i32>::new(vec![
-            Atom::new("r", vec![V(0), V(1)]),
-            Atom::new("r", vec![V(1), V(2)]),
-            Atom::new("r", vec![V(2), V(3)]),
-        ])
-        .compile();
+    //     let (varmap, q) = Query::<_, _, i32>::new(vec![
+    //         Atom::new("r", vec![V(0), V(1)]),
+    //         Atom::new("r", vec![V(1), V(2)]),
+    //         Atom::new("r", vec![V(2), V(3)]),
+    //     ])
+    //     .compile();
 
-        let picker = &[varmap[&0], varmap[&1], varmap[&2], varmap[&3]];
-        let result = q.collect(&db, &mut HashEvalContext::default(), picker);
-        assert_eq!(result, vec![vec![10, 20, 30, 40]]);
-    }
+    //     let picker = &[varmap[&0], varmap[&1], varmap[&2], varmap[&3]];
+    //     let result = q.collect(&db, &mut HashEvalContext::default(), picker);
+    //     assert_eq!(result, vec![vec![10, 20, 30, 40]]);
+    // }
 
-    #[test]
-    fn triangle() {
-        let mut db = Database::<&'static str, i32>::default();
+    // #[test]
+    // fn triangle() {
+    //     let mut db = Database::<&'static str, i32>::default();
 
-        // R(0,1) S(1,2) T(2, 0)
+    //     // R(0,1) S(1,2) T(2, 0)
 
-        let mut r = vec![];
-        let mut s = vec![];
-        let mut t = vec![];
+    //     let mut r = vec![];
+    //     let mut s = vec![];
+    //     let mut t = vec![];
 
-        let mut triangles = vec![vec![100, 200, 300]];
+    //     let mut triangles = vec![vec![100, 200, 300]];
 
-        triangles.sort();
-        triangles.dedup();
+    //     triangles.sort();
+    //     triangles.dedup();
 
-        for tri in &triangles {
-            let (a, b, c) = (tri[0], tri[1], tri[2]);
-            r.push(vec![a, b]);
-            s.push(vec![b, c]);
-            t.push(vec![c, a]);
-        }
+    //     for tri in &triangles {
+    //         let (a, b, c) = (tri[0], tri[1], tri[2]);
+    //         r.push(vec![a, b]);
+    //         s.push(vec![b, c]);
+    //         t.push(vec![c, a]);
+    //     }
 
-        // add some junk
-        let junk = if cfg!(debug_assertions) { 10 } else { 10000 };
-        for i in 0..junk {
-            let j = i + 1;
-            r.push(vec![i, j]);
-            s.push(vec![i, j]);
-            t.push(vec![i, j]);
-        }
+    //     // add some junk
+    //     let junk = if cfg!(debug_assertions) { 10 } else { 10000 };
+    //     for i in 0..junk {
+    //         let j = i + 1;
+    //         r.push(vec![i, j]);
+    //         s.push(vec![i, j]);
+    //         t.push(vec![i, j]);
+    //     }
 
-        r.sort();
-        r.dedup();
-        s.sort();
-        s.dedup();
-        t.sort();
-        t.dedup();
+    //     r.sort();
+    //     r.dedup();
+    //     s.sort();
+    //     s.dedup();
+    //     t.sort();
+    //     t.dedup();
 
-        db.add_relation_with_data("r", 2, r.concat());
-        db.add_relation_with_data("s", 2, s.concat());
-        db.add_relation_with_data("t", 2, t.concat());
+    //     db.add_relation_with_data("r", 2, r.concat());
+    //     db.add_relation_with_data("s", 2, s.concat());
+    //     db.add_relation_with_data("t", 2, t.concat());
 
-        let q2 = Query::<_, _, i32>::new(vec![
-            Atom::new("r", vec![V(0), V(1)]),
-            Atom::new("s", vec![V(1), V(2)]),
-            Atom::new("t", vec![V(2), V(0)]),
-        ]);
+    //     let q2 = Query::<_, _, i32>::new(vec![
+    //         Atom::new("r", vec![V(0), V(1)]),
+    //         Atom::new("s", vec![V(1), V(2)]),
+    //         Atom::new("t", vec![V(2), V(0)]),
+    //     ]);
 
-        let mut results = vec![];
-        let varmap = vec![(0, 0), (1, 1), (2, 2)].into_iter().collect();
-        let mut ctx = EvalContext::default();
-        q2.join(&varmap, &db, &mut ctx, |x| results.push(x.to_vec()));
+    //     let mut results = vec![];
+    //     let varmap = vec![(0, 0), (1, 1), (2, 2)].into_iter().collect();
+    //     let mut ctx = EvalContext::default();
+    //     q2.join(&varmap, &db, &mut ctx, |x| results.push(x.to_vec()));
 
-        assert_eq!(results, triangles);
-    }
+    //     assert_eq!(results, triangles);
+    // }
 }

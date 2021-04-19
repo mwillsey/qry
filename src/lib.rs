@@ -1,4 +1,9 @@
-use std::{fmt::{Debug, Display}, hash::Hash, rc::Rc, slice::ChunksExact};
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+    rc::Rc,
+    slice::ChunksExact,
+};
 
 use bumpalo::Bump;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -18,14 +23,12 @@ impl<T> Data for T where T: Debug + Clone + Hash + Eq + Default + Display {}
 #[derive(Debug, Clone)]
 pub struct Database<S, T: Data> {
     pub relations: HashMap<(S, usize), Vec<T>>,
-    pub eval_context: EvalContext<S, Trie<T>>,
 }
 
 impl<S, T: Data> Default for Database<S, T> {
     fn default() -> Self {
         let relations = Default::default();
-        let eval_context = Default::default();
-        Self { relations, eval_context }
+        Self { relations }
     }
 }
 
@@ -216,45 +219,60 @@ where
     // }
 }
 
-#[derive(Debug)]
-struct Trie<'bump, T: Display>(BumpHashMap<'bump, T, Self>);
+#[derive(Debug, Default)]
+struct Trie<T: Display>(HashMap<T, Self>);
 
-impl<'bump, T: Display> Display for Trie<'bump, T> {
-}
+// impl<'bump, T: Display> Display for Trie<'bump, T> {
+// }
 
-impl<'a, T: Display> Default for Trie<'a, T> {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
+// impl<'a, T: Display> Default for Trie<'a, T> {
+//     fn default() -> Self {
+//         Self(Default::default())
+//     }
+// }
 
-impl<'a, T: Data> Trie<'a, T> {
+// impl<'a, T: Data> Trie<'a, T> {
+//     fn len(&self) -> usize {
+//         self.0.len()
+//     }
+
+//     fn insert(&mut self, bump: &'a Bump, shuffle: &[usize], tuple: &[T]) {
+//         debug_assert!(shuffle.len() <= tuple.len());
+//         // debug_assert_eq!(shuffle.len(), tuple.len());
+//         let mut trie = self;
+//         for i in shuffle {
+//             trie = trie.0.get_or_default(tuple[*i].clone(), bump);
+//         }
+//     }
+// }
+
+impl<T: Data> Trie<T> {
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    fn insert(&mut self, bump: &'a Bump, shuffle: &[usize], tuple: &[T]) {
+    fn insert(&mut self, shuffle: &[usize], tuple: &[T]) {
         debug_assert!(shuffle.len() <= tuple.len());
         // debug_assert_eq!(shuffle.len(), tuple.len());
         let mut trie = self;
         for i in shuffle {
-            trie = trie.0.get_or_default(tuple[*i].clone(), bump);
+            trie = trie.0.entry(tuple[*i].clone()).or_default();
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct EvalContext<S, T> {
-    cache: HashMap<(S, usize, Vec<usize>), T>,
+pub struct EvalContext<S, T: Display> {
+    cache: HashMap<(S, usize, Vec<usize>), Rc<Trie<T>>>,
 }
 
-impl<S, T> EvalContext<S, T> {
+impl<S, T: Display> EvalContext<S, T> {
     pub fn clear(&mut self) {
         self.cache.clear()
     }
 }
 
-impl<S, T> Default for EvalContext<S, T> {
+impl<S, T: Display> Default for EvalContext<S, T> {
     fn default() -> Self {
         Self {
             cache: Default::default(),
@@ -286,19 +304,12 @@ where
 
         let mut vars: Vec<V> = vars_occur.keys().cloned().collect();
         vars.sort_by(|s, t| {
-            // if vars_card[s] == 1 && vars_card[t] > 1 {
-            //     return Ordering::Less;
-            // }
-            // if vars_card[s] > 1 && vars_card[t] == 1 {
-            //     return Ordering::Greater;
-            // }
-            return vars_occur[s]
-                .cmp(&vars_occur[t])
-                .reverse()
+            return (vars_card[s] == 1)
+                .cmp(&(vars_card[t] == 1))
+                .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
                 .then_with(|| vars_card[s].cmp(&vars_card[t]));
         });
 
-        // vars.into_iter().enumerate().map(|(i, v)| (v, i)).collect()
         vars
 
         // let mut vars: HashMap<V, (usize, usize)> = HashMap::default();
@@ -335,10 +346,11 @@ where
         // varmap
     }
 
-    pub fn join<'a, F>(
+    pub fn join<F>(
         &self,
         varmap: &VarMap<V>,
-        db: &'a mut Database<S, T>,
+        db: &Database<S, T>,
+        ctx: &mut EvalContext<S, T>,
         mut f: F,
     ) where
         F: FnMut(&[T]),
@@ -348,9 +360,7 @@ where
             .map(|v| (v.clone(), self.by_var[v].clone()))
             .collect();
 
-        let bump = Bump::new();
-
-        let mut tries: Vec<&Trie<T>> = Vec::with_capacity(self.atoms.len());
+        let mut tries: Vec<Rc<Trie<T>>> = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
             let mut constraint = vec![];
@@ -375,21 +385,25 @@ where
             assert!(shuffle.len() <= atom.terms.len());
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-            
-            // let trie = db.eval_context.cache.entry(key).or_insert_with(|| {
-            //     let mut trie = Trie::default();
-            //     for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-            //         if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
-            //             trie.insert(&bump, &shuffle, tuple);
-            //         }
-            //     }
-            //     trie
-            // });
 
-            // tries.push(trie)
+            let trie = ctx
+                .cache
+                .entry(key)
+                .or_insert_with(|| {
+                    let mut trie = Trie::default();
+                    for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
+                        if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
+                            trie.insert(&shuffle, tuple);
+                        }
+                    }
+                    Rc::new(trie)
+                })
+                .clone();
+
+            tries.push(trie)
         }
 
-        // let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t).collect();
+        let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t.as_ref()).collect();
 
         let empty = Trie::default();
         self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty);
@@ -401,8 +415,8 @@ where
         f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<'a, T>],
-        _empty: &'a Trie<'a, T>,
+        relations: &mut [&Trie<T>],
+        _empty: &Trie<T>,
     ) where
         F: FnMut(&[T]),
     {
@@ -465,24 +479,15 @@ where
     }
 
     #[inline]
-    fn gj_impl<'a, F, This>(
+    fn gj_impl<'a, This>(
         &self,
-        f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<'a, T>],
-        empty: &'a Trie<'a, T>,
+        relations: &mut [&'a Trie<T>],
+        empty: &'a Trie<T>,
         mut this: This,
     ) where
-        F: FnMut(&[T]),
-        This: FnMut(
-            &Query<V, S, T>,
-            &mut F,
-            &mut Vec<T>,
-            &[(V, Vec<usize>)],
-            &mut [&'a Trie<'a, T>],
-            &'a Trie<'a, T>,
-        ),
+        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]),
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -498,7 +503,7 @@ where
                 for val in relations[j].0.keys() {
                     relations[j] = r.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(&self, f, tuple, vars, relations, empty);
+                    this(tuple, relations);
                 }
                 tuple.pop();
                 relations[j] = r;
@@ -517,7 +522,7 @@ where
                     relations[j_min] = r.0.get(&val).unwrap_or(empty);
                     relations[j_max] = rj.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(&self, f, tuple, vars, relations, empty);
+                    this(tuple, relations);
                 }
                 tuple.pop();
                 relations[j_min] = r;
@@ -546,7 +551,7 @@ where
                         relations[j] = sub_r;
                     }
                     tuple[pos] = val;
-                    this(&self, f, tuple, vars, relations, empty);
+                    this(tuple, relations);
                 }
                 tuple.pop();
                 for (&j, r) in js.iter().zip(&jrelations) {
@@ -561,8 +566,8 @@ where
         f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<'a, T>],
-        empty: &'a Trie<'a, T>,
+        relations: &mut [&'a Trie<T>],
+        empty: &'a Trie<T>,
     ) where
         F: FnMut(&[T]),
     {
@@ -571,16 +576,14 @@ where
             0 => {
                 self.gj_impl_base(f, tuple, vars, relations, empty);
             }
-            _ => self.gj_impl(
-                f,
-                tuple,
-                vars,
-                relations,
-                empty,
-                |query, f, tuple, vars, relations, empty| {
-                    query.gj(f, tuple, vars, relations, empty);
-                },
-            ),
+            1 => {
+                self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
+                    self.gj_impl_base(f, tuple, vars, relations, empty);
+                })
+            }
+            _ => self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
+                self.gj(f, tuple, vars, relations, empty);
+            }),
         }
     }
 }
