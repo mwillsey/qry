@@ -107,7 +107,7 @@ where
                 }
             }
         }};
-    };
+    }
 
     macro_rules! join {
         ($l:ident, $r:ident) => {{

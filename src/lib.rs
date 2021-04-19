@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, rc::Rc, slice::ChunksExact};
+use std::{fmt::{Debug, Display}, hash::Hash, rc::Rc, slice::ChunksExact};
 
 use bumpalo::Bump;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -12,18 +12,20 @@ use util::*;
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
-pub trait Data: Debug + Clone + Hash + Eq + Default {}
-impl<T> Data for T where T: Debug + Clone + Hash + Eq + Default {}
+pub trait Data: Debug + Clone + Hash + Eq + Default + Display {}
+impl<T> Data for T where T: Debug + Clone + Hash + Eq + Default + Display {}
 
 #[derive(Debug, Clone)]
-pub struct Database<S, T> {
+pub struct Database<S, T: Data> {
     pub relations: HashMap<(S, usize), Vec<T>>,
+    pub eval_context: EvalContext<S, Trie<T>>,
 }
 
-impl<S, T> Default for Database<S, T> {
+impl<S, T: Data> Default for Database<S, T> {
     fn default() -> Self {
         let relations = Default::default();
-        Self { relations }
+        let eval_context = Default::default();
+        Self { relations, eval_context }
     }
 }
 
@@ -77,7 +79,7 @@ impl<V: Eq + Clone, S, T> Atom<V, S, T> {
     }
 }
 
-pub type VarMap<V> = HashMap<V, usize>;
+pub type VarMap<V> = Vec<V>;
 
 #[derive(Debug, Clone)]
 pub struct Query<V, S, T> {
@@ -122,101 +124,105 @@ where
     S: RelationSymbol + 'static,
     T: Data + 'static,
 {
-    pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
-        let na = self.atoms.len();
-        assert_ne!(na, 0);
+    // pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
+    //     let na = self.atoms.len();
+    //     assert_ne!(na, 0);
 
-        let mut exprs: Vec<(usize, usize, VarMap<V>, Expr<S, T>)> = self
-            .atoms
-            .iter()
-            .map(|atom| {
-                let mut used_vars: HashMap<V, Vec<usize>> = Default::default();
-                let mut term_eqs: Vec<(T, usize)> = vec![];
-                for (i, term) in atom.terms.iter().enumerate() {
-                    match term {
-                        Term::Variable(v) => used_vars.entry(v.clone()).or_default().push(i),
-                        Term::Constant(c) => term_eqs.push((c.clone(), i)),
-                    }
-                }
+    //     let mut exprs: Vec<(usize, usize, VarMap<V>, Expr<S, T>)> = self
+    //         .atoms
+    //         .iter()
+    //         .map(|atom| {
+    //             let mut used_vars: HashMap<V, Vec<usize>> = Default::default();
+    //             let mut term_eqs: Vec<(T, usize)> = vec![];
+    //             for (i, term) in atom.terms.iter().enumerate() {
+    //                 match term {
+    //                     Term::Variable(v) => used_vars.entry(v.clone()).or_default().push(i),
+    //                     Term::Constant(c) => term_eqs.push((c.clone(), i)),
+    //                 }
+    //             }
 
-                let mut var_map = VarMap::default();
-                let mut var_eqs: Vec<(usize, usize)> = vec![];
-                for (v, occurences) in used_vars {
-                    var_map.insert(v, occurences[0]);
-                    for pair in occurences.windows(2) {
-                        var_eqs.push((pair[0], pair[1]))
-                    }
-                }
+    //             let mut var_map = VarMap::default();
+    //             let mut var_eqs: Vec<(usize, usize)> = vec![];
+    //             for (v, occurences) in used_vars {
+    //                 var_map.insert(v, occurences[0]);
+    //                 for pair in occurences.windows(2) {
+    //                     var_eqs.push((pair[0], pair[1]))
+    //                 }
+    //             }
 
-                let n_filters = var_eqs.len() + term_eqs.len();
-                let expr = Expr::Scan {
-                    relation: (atom.symbol.clone(), atom.arity),
-                    var_eqs,
-                    term_eqs,
-                };
-                (1, n_filters, var_map, expr)
-            })
-            .collect();
+    //             let n_filters = var_eqs.len() + term_eqs.len();
+    //             let expr = Expr::Scan {
+    //                 relation: (atom.symbol.clone(), atom.arity),
+    //                 var_eqs,
+    //                 term_eqs,
+    //             };
+    //             (1, n_filters, var_map, expr)
+    //         })
+    //         .collect();
 
-        while exprs.len() > 1 {
-            let mut proposals = vec![];
-            let mut iter = exprs.iter().enumerate();
-            while let Some((i1, (d1, nf1, v1, _e1))) = iter.next() {
-                for (i2, (d2, nf2, v2, _e2)) in iter.clone() {
-                    let nf = nf1 + nf2;
-                    let mut score = 0;
-                    let mut var_map = VarMap::default();
-                    let mut merge: Vec<Sided> = vec![];
-                    for (v, i) in v1.iter() {
-                        var_map.insert(v.clone(), merge.len());
-                        merge.push(Sided::left(*i));
-                    }
-                    for (v, i) in v2.iter() {
-                        if !v1.contains_key(v) {
-                            var_map.insert(v.clone(), merge.len());
-                            merge.push(Sided::right(*i));
-                        } else {
-                            score += 1;
-                        }
-                    }
-                    proposals.push(((d1.max(d2) + 1, score, nf), var_map, merge, (i1, i2)));
-                }
-            }
-            let ((depth, score, nf), var_map, merge, (i1, i2)) =
-                proposals.iter().max_by_key(|p| p.0).unwrap().clone();
-            // dbg!(score, nf);
-            assert!(i1 < i2);
-            // must remove i2 first to not mess up index
-            let (_, nf1, v2, e2) = exprs.remove(i2);
-            let (_, nf2, v1, e1) = exprs.remove(i1);
-            let (key1, key2): (Vec<usize>, Vec<usize>) = v1
-                .iter()
-                .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
-                .unzip();
-            assert_eq!(score, key1.len());
-            let expr = Expr::Join {
-                left: Keyed {
-                    key: key1,
-                    expr: Box::new(e1),
-                },
-                right: Keyed {
-                    key: key2,
-                    expr: Box::new(e2),
-                },
-                merge,
-            };
-            exprs.push((depth, nf, var_map, expr));
-        }
+    //     while exprs.len() > 1 {
+    //         let mut proposals = vec![];
+    //         let mut iter = exprs.iter().enumerate();
+    //         while let Some((i1, (d1, nf1, v1, _e1))) = iter.next() {
+    //             for (i2, (d2, nf2, v2, _e2)) in iter.clone() {
+    //                 let nf = nf1 + nf2;
+    //                 let mut score = 0;
+    //                 let mut var_map = VarMap::default();
+    //                 let mut merge: Vec<Sided> = vec![];
+    //                 for (v, i) in v1.iter() {
+    //                     var_map.insert(v.clone(), merge.len());
+    //                     merge.push(Sided::left(*i));
+    //                 }
+    //                 for (v, i) in v2.iter() {
+    //                     if !v1.contains_key(v) {
+    //                         var_map.insert(v.clone(), merge.len());
+    //                         merge.push(Sided::right(*i));
+    //                     } else {
+    //                         score += 1;
+    //                     }
+    //                 }
+    //                 proposals.push(((d1.max(d2) + 1, score, nf), var_map, merge, (i1, i2)));
+    //             }
+    //         }
+    //         let ((depth, score, nf), var_map, merge, (i1, i2)) =
+    //             proposals.iter().max_by_key(|p| p.0).unwrap().clone();
+    //         // dbg!(score, nf);
+    //         assert!(i1 < i2);
+    //         // must remove i2 first to not mess up index
+    //         let (_, nf1, v2, e2) = exprs.remove(i2);
+    //         let (_, nf2, v1, e1) = exprs.remove(i1);
+    //         let (key1, key2): (Vec<usize>, Vec<usize>) = v1
+    //             .iter()
+    //             .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
+    //             .unzip();
+    //         assert_eq!(score, key1.len());
+    //         let expr = Expr::Join {
+    //             left: Keyed {
+    //                 key: key1,
+    //                 expr: Box::new(e1),
+    //             },
+    //             right: Keyed {
+    //                 key: key2,
+    //                 expr: Box::new(e2),
+    //             },
+    //             merge,
+    //         };
+    //         exprs.push((depth, nf, var_map, expr));
+    //     }
 
-        assert_eq!(exprs.len(), 1);
-        let (_, _nf, varmap, expr) = exprs.pop().unwrap();
-        (varmap, expr)
-    }
+    //     assert_eq!(exprs.len(), 1);
+    //     let (_, _nf, varmap, expr) = exprs.pop().unwrap();
+    //     (varmap, expr)
+    // }
 }
 
-struct Trie<'bump, T>(BumpHashMap<'bump, T, Self>);
+#[derive(Debug)]
+struct Trie<'bump, T: Display>(BumpHashMap<'bump, T, Self>);
 
-impl<'a, T> Default for Trie<'a, T> {
+impl<'bump, T: Display> Display for Trie<'bump, T> {
+}
+
+impl<'a, T: Display> Default for Trie<'a, T> {
     fn default() -> Self {
         Self(Default::default())
     }
@@ -262,61 +268,89 @@ where
     S: RelationSymbol,
     T: Data,
 {
-    pub fn vars(&self, _db: &Database<S, T>) -> VarMap<V> {
-        let mut vars: HashMap<V, (usize, usize)> = HashMap::default();
+    pub fn vars(&self, db: &Database<S, T>) -> VarMap<V> {
+        use std::cmp::Ordering;
+        let mut vars_occur: HashMap<V, usize> = HashMap::default();
+        for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
+            let p = vars_occur.entry(var).or_default();
+            *p += 1;
+        }
+        let mut vars_card: HashMap<V, usize> = HashMap::default();
         for atom in &self.atoms {
-            for var in atom.vars() {
-                let p = vars.entry(var).or_default();
-                p.0 += 1;
-                p.1 += 1;
+            let relation = db.get(&(atom.symbol.clone(), atom.arity));
+            for (i, var) in atom.vars().enumerate() {
+                let p = vars_card.entry(var).or_default();
+                *p = std::cmp::min(*p, relation.len());
             }
         }
 
-        let mut varmap = HashMap::default();
-        loop {
-            let biggest = vars.iter().max_by_key(|(_v, counts)| *counts);
-            let v = match biggest {
-                Some((v, _counts)) => v.clone(),
-                None => break,
-            };
+        let mut vars: Vec<V> = vars_occur.keys().cloned().collect();
+        vars.sort_by(|s, t| {
+            // if vars_card[s] == 1 && vars_card[t] > 1 {
+            //     return Ordering::Less;
+            // }
+            // if vars_card[s] > 1 && vars_card[t] == 1 {
+            //     return Ordering::Greater;
+            // }
+            return vars_occur[s]
+                .cmp(&vars_occur[t])
+                .reverse()
+                .then_with(|| vars_card[s].cmp(&vars_card[t]));
+        });
 
-            vars.remove(&v);
+        // vars.into_iter().enumerate().map(|(i, v)| (v, i)).collect()
+        vars
 
-            let i = varmap.len();
-            varmap.insert(v, i);
+        // let mut vars: HashMap<V, (usize, usize)> = HashMap::default();
+        // for atom in &self.atoms {
+        //     for var in atom.vars() {
+        //         let p = vars.entry(var).or_default();
+        //         p.0 += 1;
+        //         p.1 += 1;
+        //     }
+        // }
 
-            vars.values_mut().for_each(|counts| counts.0 = 0);
-            for (v, counts) in vars.iter_mut() {
-                for atom in &self.atoms {
-                    if atom.has_var(v) {
-                        counts.0 += 1;
-                    }
-                }
-            }
-        }
-        varmap
+        // let mut varmap = HashMap::default();
+        // loop {
+        //     let biggest = vars.iter().max_by_key(|(_v, counts)| *counts);
+        //     let v = match biggest {
+        //         Some((v, _counts)) => v.clone(),
+        //         None => break,
+        //     };
+
+        //     vars.remove(&v);
+
+        //     let i = varmap.len();
+        //     varmap.insert(v, i);
+
+        //     vars.values_mut().for_each(|counts| counts.0 = 0);
+        //     for (v, counts) in vars.iter_mut() {
+        //         for atom in &self.atoms {
+        //             if atom.has_var(v) {
+        //                 counts.0 += 1;
+        //             }
+        //         }
+        //     }
+        // }
+        // varmap
     }
 
-    pub fn join<F>(
+    pub fn join<'a, F>(
         &self,
         varmap: &VarMap<V>,
-        db: &Database<S, T>,
-        ctx: &mut EvalContext<S, T>,
+        db: &'a mut Database<S, T>,
         mut f: F,
     ) where
         F: FnMut(&[T]),
     {
-        let mut vars: Vec<_> = self
-            .by_var
+        let vars: Vec<_> = varmap
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|v| (v.clone(), self.by_var[v].clone()))
             .collect();
-
-        vars.sort_by_key(|x| varmap[&x.0]);
 
         let bump = Bump::new();
 
-        let mut tries = Vec::with_capacity(self.atoms.len());
+        let mut tries: Vec<&Trie<T>> = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
             let mut constraint = vec![];
@@ -341,17 +375,21 @@ where
             assert!(shuffle.len() <= atom.terms.len());
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-            let mut trie = Trie::default();
-            for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-                if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
-                    trie.insert(&bump, &shuffle, tuple);
-                }
-            }
+            
+            // let trie = db.eval_context.cache.entry(key).or_insert_with(|| {
+            //     let mut trie = Trie::default();
+            //     for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
+            //         if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
+            //             trie.insert(&bump, &shuffle, tuple);
+            //         }
+            //     }
+            //     trie
+            // });
 
-            tries.push(trie)
+            // tries.push(trie)
         }
 
-        let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t).collect();
+        // let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t).collect();
 
         let empty = Trie::default();
         self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty);

@@ -1,6 +1,7 @@
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 use bumpalo::Bump;
+use std::fmt::Display;
 
 macro_rules! unreachable_unchecked {
     () => {
@@ -40,13 +41,19 @@ macro_rules! probe_mut {
     }};
 }
 
-pub struct BumpHashMap<'bump, K: 'bump, V: 'bump, S = BuildHasherDefault<rustc_hash::FxHasher>> {
+#[derive(Debug)]
+pub struct BumpHashMap<
+    'bump,
+    K: Display + 'bump,
+    V: Display + 'bump,
+    S = BuildHasherDefault<rustc_hash::FxHasher>,
+> {
     len: usize,
     spots: &'bump mut [Option<(K, V)>],
     builder: S,
 }
 
-impl<'bump, K: 'bump, V: 'bump> Default for BumpHashMap<'bump, K, V> {
+impl<'bump, K: 'bump + Display, V: 'bump + Display> Default for BumpHashMap<'bump, K, V> {
     fn default() -> Self {
         Self {
             len: 0,
@@ -58,8 +65,8 @@ impl<'bump, K: 'bump, V: 'bump> Default for BumpHashMap<'bump, K, V> {
 
 impl<'bump, K, V, S> BumpHashMap<'bump, K, V, S>
 where
-    K: 'bump + Hash + Eq,
-    V: 'bump,
+    K: 'bump + Hash + Eq + Display,
+    V: 'bump + Display,
     S: std::hash::BuildHasher,
 {
     const GROWTH_FACTOR: usize = 2;
