@@ -263,7 +263,7 @@ impl<T: Data> Trie<T> {
 
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T: Display> {
-    cache: HashMap<(S, usize, Vec<usize>), Rc<Trie<T>>>,
+    cache: HashMap<(S, usize, Vec<Vec<usize>>), Rc<Trie<T>>>,
 }
 
 impl<S, T: Display> EvalContext<S, T> {
@@ -287,7 +287,6 @@ where
     T: Data,
 {
     pub fn vars(&self, db: &Database<S, T>) -> VarMap<V> {
-        use std::cmp::Ordering;
         let mut vars_occur: HashMap<V, usize> = HashMap::default();
         for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
             let p = vars_occur.entry(var).or_default();
@@ -304,8 +303,8 @@ where
 
         let mut vars: Vec<V> = vars_occur.keys().cloned().collect();
         vars.sort_by(|s, t| {
-            return (vars_card[s] == 1)
-                .cmp(&(vars_card[t] == 1))
+            return (vars_card[s] < 100)
+                .cmp(&(vars_card[t] < 100))
                 .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
                 .then_with(|| vars_card[s].cmp(&vars_card[t]));
         });
@@ -363,20 +362,18 @@ where
         let mut tries: Vec<Rc<Trie<T>>> = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
-            let mut constraint = vec![];
+            let mut index = Vec::with_capacity(atom.terms.len());
             for (var, _) in &vars {
-                let mut found_var = None;
+                let mut found_var = false;
                 for (i, term) in atom.terms.iter().enumerate() {
                     if let Term::Variable(v) = term {
-                        if var == v && !shuffle.contains(&i) {
-                            match found_var {
-                                None => {
-                                    found_var = Some(i);
-                                    shuffle.push(i);
-                                }
-                                Some(j) => {
-                                    constraint.push((i, j));
-                                }
+                        if var == v && !index.contains(&i) {
+                            if found_var == false {
+                                found_var = true;
+                                index.push(i);
+                                shuffle.push(vec![i]);
+                            } else {
+                                shuffle.last_mut().unwrap().push(i);
                             }
                         }
                     }
@@ -385,15 +382,16 @@ where
             assert!(shuffle.len() <= atom.terms.len());
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-
+            // only keep meaningful constraints 
+            shuffle.retain(|group| group.len() > 1);
             let trie = ctx
                 .cache
                 .entry(key)
                 .or_insert_with(|| {
                     let mut trie = Trie::default();
                     for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-                        if constraint.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
-                            trie.insert(&shuffle, tuple);
+                        if shuffle.iter().all(|group| group[1..].iter().all(|i| tuple[*i] == tuple[group[0]])) {
+                            trie.insert(&index, tuple);
                         }
                     }
                     Rc::new(trie)
