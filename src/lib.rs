@@ -280,6 +280,8 @@ impl<S, T: Display> Default for EvalContext<S, T> {
     }
 }
 
+pub type Result = std::result::Result<(), ()>;
+
 impl<V, S, T> Query<V, S, T>
 where
     V: Eq + Hash + Clone + Debug,
@@ -351,8 +353,9 @@ where
         db: &Database<S, T>,
         ctx: &mut EvalContext<S, T>,
         mut f: F,
-    ) where
-        F: FnMut(&[T]),
+    ) -> Result
+    where
+        F: FnMut(&[T]) -> Result,
     {
         let vars: Vec<_> = varmap
             .iter()
@@ -404,7 +407,7 @@ where
         let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t.as_ref()).collect();
 
         let empty = Trie::default();
-        self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty);
+        self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty)
     }
 
     #[inline]
@@ -415,8 +418,9 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&Trie<T>],
         _empty: &Trie<T>,
-    ) where
-        F: FnMut(&[T]),
+    ) -> Result
+    where
+        F: FnMut(&[T]) -> Result,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -430,7 +434,7 @@ where
                 tuple.push(Default::default());
                 for val in relations[j].0.keys() {
                     tuple[pos] = val.clone();
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
@@ -446,7 +450,7 @@ where
                 tuple.push(Default::default());
                 for val in intersection {
                     tuple[pos] = val.clone();
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
@@ -469,11 +473,12 @@ where
                 tuple.push(Default::default());
                 for val in intersection {
                     tuple[pos] = val;
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
-        }
+        };
+        Ok(())
     }
 
     #[inline]
@@ -484,8 +489,9 @@ where
         relations: &mut [&'a Trie<T>],
         empty: &'a Trie<T>,
         mut this: This,
-    ) where
-        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]),
+    ) -> Result
+    where
+        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]) -> Result,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -501,7 +507,7 @@ where
                 for val in relations[j].0.keys() {
                     relations[j] = r.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 relations[j] = r;
@@ -520,7 +526,7 @@ where
                     relations[j_min] = r.0.get(&val).unwrap_or(empty);
                     relations[j_max] = rj.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 relations[j_min] = r;
@@ -549,14 +555,15 @@ where
                         relations[j] = sub_r;
                     }
                     tuple[pos] = val;
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 for (&j, r) in js.iter().zip(&jrelations) {
                     relations[j] = r
                 }
             }
-        }
+        };
+        Ok(())
     }
 
     fn gj<'a, F>(
@@ -566,21 +573,22 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Trie<T>],
         empty: &'a Trie<T>,
-    ) where
-        F: FnMut(&[T]),
+    ) -> Result
+    where
+        F: FnMut(&[T]) -> Result,
     {
         let rem = vars.len() - tuple.len() - 1;
         match rem {
             0 => {
-                self.gj_impl_base(f, tuple, vars, relations, empty);
+                self.gj_impl_base(f, tuple, vars, relations, empty)
             }
             1 => {
                 self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
-                    self.gj_impl_base(f, tuple, vars, relations, empty);
+                    self.gj_impl_base(f, tuple, vars, relations, empty)
                 })
             }
             _ => self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
-                self.gj(f, tuple, vars, relations, empty);
+                self.gj(f, tuple, vars, relations, empty)
             }),
         }
     }
