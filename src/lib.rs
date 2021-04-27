@@ -1,7 +1,7 @@
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
-    rc::Rc,
+    sync::Arc,
     slice::ChunksExact,
 };
 
@@ -263,7 +263,7 @@ impl<T: Data> Trie<T> {
 
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T: Display> {
-    cache: HashMap<(S, usize, Vec<Vec<usize>>), Rc<Trie<T>>>,
+    cache: HashMap<(S, usize, Vec<Vec<usize>>), Arc<Trie<T>>>,
 }
 
 impl<S, T: Display> EvalContext<S, T> {
@@ -360,7 +360,7 @@ where
             .map(|v| (v.clone(), self.by_var[v].clone()))
             .collect();
 
-        let mut tries: Vec<Rc<Trie<T>>> = Vec::with_capacity(self.atoms.len());
+        let mut tries: Vec<Arc<Trie<T>>> = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
             let mut index = Vec::with_capacity(atom.terms.len());
@@ -395,7 +395,7 @@ where
                             trie.insert(&index, tuple);
                         }
                     }
-                    Rc::new(trie)
+                    Arc::new(trie)
                 })
                 .clone();
 
