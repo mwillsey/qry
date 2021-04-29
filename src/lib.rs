@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
@@ -6,7 +7,8 @@ use std::{
 };
 
 use bumpalo::Bump;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap as HashMap};
+use rustc_hash::{FxHashSet as HashSet};
 
 mod expr;
 pub use expr::*;
@@ -280,6 +282,8 @@ impl<S, T: Display> Default for EvalContext<S, T> {
     }
 }
 
+type Result = std::result::Result<(), ()>;
+
 impl<V, S, T> Query<V, S, T>
 where
     V: Eq + Hash + Clone + Debug,
@@ -295,7 +299,7 @@ where
         let mut vars_card: HashMap<V, usize> = HashMap::default();
         for atom in &self.atoms {
             let relation = db.get(&(atom.symbol.clone(), atom.arity));
-            for (i, var) in atom.vars().enumerate() {
+            for var in atom.vars() {
                 let p = vars_card.entry(var).or_default();
                 *p = std::cmp::min(*p, relation.len());
             }
@@ -351,9 +355,9 @@ where
         db: &Database<S, T>,
         ctx: &mut EvalContext<S, T>,
         mut f: F,
-    )
+    ) -> Result
     where
-        F: FnMut(&[T]),
+        F: FnMut(&[T]) -> Result,
     {
         let vars: Vec<_> = varmap
             .iter()
@@ -416,9 +420,9 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&Trie<T>],
         _empty: &Trie<T>,
-    )
+    ) -> Result
     where
-        F: FnMut(&[T]),
+        F: FnMut(&[T]) -> Result,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -432,7 +436,7 @@ where
                 tuple.push(Default::default());
                 for val in relations[j].0.keys() {
                     tuple[pos] = val.clone();
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
@@ -448,7 +452,7 @@ where
                 tuple.push(Default::default());
                 for val in intersection {
                     tuple[pos] = val.clone();
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
@@ -471,11 +475,12 @@ where
                 tuple.push(Default::default());
                 for val in intersection {
                     tuple[pos] = val;
-                    f(tuple);
+                    f(tuple)?;
                 }
                 tuple.pop();
             }
         };
+        Ok(())
     }
 
     #[inline]
@@ -486,9 +491,9 @@ where
         relations: &mut [&'a Trie<T>],
         empty: &'a Trie<T>,
         mut this: This,
-    )
+    ) -> Result
     where
-        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]),
+        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]) -> Result,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -504,7 +509,7 @@ where
                 for val in relations[j].0.keys() {
                     relations[j] = r.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 relations[j] = r;
@@ -523,7 +528,7 @@ where
                     relations[j_min] = r.0.get(&val).unwrap_or(empty);
                     relations[j_max] = rj.0.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 relations[j_min] = r;
@@ -552,7 +557,7 @@ where
                         relations[j] = sub_r;
                     }
                     tuple[pos] = val;
-                    this(tuple, relations);
+                    this(tuple, relations)?;
                 }
                 tuple.pop();
                 for (&j, r) in js.iter().zip(&jrelations) {
@@ -560,6 +565,7 @@ where
                 }
             }
         };
+        Ok(())
     }
 
     fn gj<'a, F>(
@@ -569,9 +575,9 @@ where
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Trie<T>],
         empty: &'a Trie<T>,
-    )
+    ) -> Result
     where
-        F: FnMut(&[T]),
+        F: FnMut(&[T]) -> Result,
     {
         let rem = vars.len() - tuple.len() - 1;
         match rem {

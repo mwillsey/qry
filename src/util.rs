@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use std::hash::{BuildHasherDefault, Hash, Hasher};
-
 use bumpalo::Bump;
 use std::fmt::Display;
 
