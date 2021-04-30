@@ -2,13 +2,13 @@
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
-    sync::Arc,
     slice::ChunksExact,
+    sync::Arc,
 };
 
 use bumpalo::Bump;
-use rustc_hash::{FxHashMap as HashMap};
-use rustc_hash::{FxHashSet as HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 mod expr;
 pub use expr::*;
@@ -49,20 +49,17 @@ impl<S: RelationSymbol, T: Data> Database<S, T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Term<V, T> {
-    Variable(V),
-    Constant(T),
-}
+pub struct Term<V>(V);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Atom<V, S, T> {
+pub struct Atom<V, S> {
     pub symbol: S,
     pub arity: usize,
-    pub terms: Vec<Term<V, T>>,
+    pub terms: Vec<Term<V>>,
 }
 
-impl<V, S, T> Atom<V, S, T> {
-    pub fn new(symbol: S, terms: Vec<Term<V, T>>) -> Self {
+impl<V, S> Atom<V, S> {
+    pub fn new(symbol: S, terms: Vec<Term<V>>) -> Self {
         Self {
             symbol,
             arity: terms.len(),
@@ -71,12 +68,9 @@ impl<V, S, T> Atom<V, S, T> {
     }
 }
 
-impl<V: Eq + Clone, S, T> Atom<V, S, T> {
+impl<V: Eq + Clone, S> Atom<V, S> {
     pub fn vars(&self) -> impl Iterator<Item = V> + '_ {
-        self.terms.iter().filter_map(|t| match t {
-            Term::Variable(v) => Some(v.clone()),
-            _ => None,
-        })
+        self.terms.iter().map(|t| t.0)
     }
 
     pub fn has_var(&self, v: &V) -> bool {
@@ -87,24 +81,23 @@ impl<V: Eq + Clone, S, T> Atom<V, S, T> {
 pub type VarMap<V> = Vec<V>;
 
 #[derive(Debug, Clone)]
-pub struct Query<V, S, T> {
-    pub atoms: Vec<Atom<V, S, T>>,
+pub struct Query<V, S> {
+    pub atoms: Vec<Atom<V, S>>,
     by_var: HashMap<V, Vec<usize>>,
 }
 
-impl<V: PartialEq, S: PartialEq, T: PartialEq> PartialEq for Query<V, S, T> {
+impl<V: PartialEq, S: PartialEq, T: PartialEq> PartialEq for Query<V, S> {
     fn eq(&self, other: &Self) -> bool {
         self.atoms == other.atoms
     }
 }
 
-impl<V, S, T> Query<V, S, T>
+impl<V, S> Query<V, S>
 where
     V: Eq + Hash + Clone,
     S: RelationSymbol,
-    T: Data,
 {
-    pub fn new(atoms: Vec<Atom<V, S, T>>) -> Self {
+    pub fn new(atoms: Vec<Atom<V, S>>) -> Self {
         let mut new = Self {
             atoms,
             by_var: Default::default(),
@@ -123,11 +116,10 @@ where
     }
 }
 
-impl<V, S, T> Query<V, S, T>
+impl<V, S> Query<V, S>
 where
     V: Hash + Eq + Clone,
     S: RelationSymbol + 'static,
-    T: Data + 'static,
 {
     // pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
     //     let na = self.atoms.len();
@@ -222,7 +214,10 @@ where
 }
 
 #[derive(Debug, Default)]
-struct Trie<T: Display>(HashMap<T, Self>);
+struct Index<T: Display> {
+    buf: Vec<T>,
+    trie: HashMap<T, Self>,
+}
 
 // impl<'bump, T: Display> Display for Trie<'bump, T> {
 // }
@@ -248,24 +243,34 @@ struct Trie<T: Display>(HashMap<T, Self>);
 //     }
 // }
 
-impl<T: Data> Trie<T> {
-    fn len(&self) -> usize {
-        self.0.len()
+struct AccessPath<R: Iterator<Item = usize>, S: Iterator<Item = usize>> {
+    trie_path: R,
+    buf_path: S,
+}
+
+impl<T: Data> Index<T> {
+    fn map_len(&self) -> usize {
+        self.map_len()
     }
 
-    fn insert(&mut self, shuffle: &[usize], tuple: &[T]) {
-        debug_assert!(shuffle.len() <= tuple.len());
-        // debug_assert_eq!(shuffle.len(), tuple.len());
-        let mut trie = self;
-        for i in shuffle {
-            trie = trie.0.entry(tuple[*i].clone()).or_default();
+    fn insert<R, S>(&mut self, shuffle: &AccessPath<R, S>, tuple: &[T])
+    where
+        R: Iterator<Item = usize>,
+        S: Iterator<Item = usize>,
+    {
+        let index = &mut self;
+        for i in shuffle.trie_path {
+            index = &mut index.trie.entry(tuple[i]).or_default();
+        }
+        for i in shuffle.buf_path {
+            index.buf.push(tuple[i]);
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T: Display> {
-    cache: HashMap<(S, usize, Vec<Vec<usize>>), Arc<Trie<T>>>,
+    cache: HashMap<(S, usize, Vec<Vec<usize>>), Arc<Index<T>>>,
 }
 
 impl<S, T: Display> EvalContext<S, T> {
@@ -284,13 +289,13 @@ impl<S, T: Display> Default for EvalContext<S, T> {
 
 type Result = std::result::Result<(), ()>;
 
-impl<V, S, T> Query<V, S, T>
+impl<V, S> Query<V, S>
 where
     V: Eq + Hash + Clone + Debug,
     S: RelationSymbol,
-    T: Data,
 {
-    pub fn vars(&self, db: &Database<S, T>) -> VarMap<V> {
+    #[feature(drain_filter)]
+    pub fn vars<T: Data>(&self, db: &Database<S, T>) -> VarMap<V> {
         let mut vars_occur: HashMap<V, usize> = HashMap::default();
         for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
             let p = vars_occur.entry(var).or_default();
@@ -304,52 +309,40 @@ where
                 *p = std::cmp::min(*p, relation.len());
             }
         }
+        let vars_ord: HashMap<(S, usize), usize> = db
+            .relations
+            .keys()
+            .enumerate()
+            .map(|(i, (v, sz))| ((v.clone(), *sz), i))
+            .collect();
 
-        let mut vars: Vec<V> = vars_occur.keys().cloned().collect();
+        // first only consider variables with multi occurrence
+        let mut vars: Vec<V> = vars_occur
+            .iter()
+            .filter_map(|(v, occur)| if *occur > 1 { Some(v) } else { None })
+            .cloned()
+            .collect();
         vars.sort_by(|s, t| {
             return (vars_card[s] < 100)
                 .cmp(&(vars_card[t] < 100))
                 .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
-                .then_with(|| vars_card[s].cmp(&vars_card[t]));
+                .then_with(|| vars_card[s].cmp(&vars_card[t]))
         });
 
+        // next add variables with only one occurrence, so they are
+        // batched together by the relation they are in
+        for atom in self.atoms {
+            for var in atom.vars() {
+                if vars_occur[&var] == 1 {
+                    vars.push(var);
+                }
+            }
+        }
+
         vars
-
-        // let mut vars: HashMap<V, (usize, usize)> = HashMap::default();
-        // for atom in &self.atoms {
-        //     for var in atom.vars() {
-        //         let p = vars.entry(var).or_default();
-        //         p.0 += 1;
-        //         p.1 += 1;
-        //     }
-        // }
-
-        // let mut varmap = HashMap::default();
-        // loop {
-        //     let biggest = vars.iter().max_by_key(|(_v, counts)| *counts);
-        //     let v = match biggest {
-        //         Some((v, _counts)) => v.clone(),
-        //         None => break,
-        //     };
-
-        //     vars.remove(&v);
-
-        //     let i = varmap.len();
-        //     varmap.insert(v, i);
-
-        //     vars.values_mut().for_each(|counts| counts.0 = 0);
-        //     for (v, counts) in vars.iter_mut() {
-        //         for atom in &self.atoms {
-        //             if atom.has_var(v) {
-        //                 counts.0 += 1;
-        //             }
-        //         }
-        //     }
-        // }
-        // varmap
     }
 
-    pub fn join<F>(
+    pub fn join<F, T>(
         &self,
         varmap: &VarMap<V>,
         db: &Database<S, T>,
@@ -358,97 +351,122 @@ where
     ) -> Result
     where
         F: FnMut(&[T]) -> Result,
+        T: Data,
     {
         let vars: Vec<_> = varmap
             .iter()
             .map(|v| (v.clone(), self.by_var[v].clone()))
             .collect();
 
-        let mut tries: Vec<Arc<Trie<T>>> = Vec::with_capacity(self.atoms.len());
+        let mut tries: Vec<Arc<Index<T>>> = Vec::with_capacity(self.atoms.len());
+        let mut break_ats: Vec<usize> = Vec::with_capacity(self.atoms.len());
         for atom in &self.atoms {
             let mut shuffle = Vec::with_capacity(atom.terms.len());
-            let mut index = Vec::with_capacity(atom.terms.len());
+            let mut access_path = Vec::with_capacity(atom.terms.len());
             for (var, _) in &vars {
                 let mut found_var = false;
                 for (i, term) in atom.terms.iter().enumerate() {
-                    if let Term::Variable(v) = term {
-                        if var == v && !index.contains(&i) {
-                            if found_var == false {
-                                found_var = true;
-                                index.push(i);
-                                shuffle.push(vec![i]);
-                            } else {
-                                shuffle.last_mut().unwrap().push(i);
-                            }
+                    if var == &term.0 && !access_path.contains(&i) {
+                        if found_var == false {
+                            found_var = true;
+                            access_path.push(i);
+                            shuffle.push(vec![i]);
+                        } else {
+                            shuffle.last_mut().unwrap().push(i);
                         }
                     }
                 }
             }
-            assert!(shuffle.len() <= atom.terms.len());
+            let break_at = access_path
+                .iter()
+                .rev()
+                .position(|i| {
+                    let var = atom.vars().collect::<Vec<_>>()[*i];
+                    let (_var, by_var) = vars
+                        .iter()
+                        .find(|(var1, _)| var1 == &var)
+                        .expect("variable not found");
+                    // TODO: Note patterns like R(x, x) are not batched
+                    by_var.len() != 1
+                })
+                .map(|rlen| access_path.len() - rlen)
+                .unwrap_or(0);
+            let (trie_path, buf_path) = access_path.split_at(break_at);
+            let access_path = AccessPath {
+                trie_path: trie_path.iter().map(|x| *x),
+                buf_path: buf_path.iter().map(|x| *x),
+            };
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
-            // only keep meaningful constraints 
+            // only keep meaningful constraints
             shuffle.retain(|group| group.len() > 1);
-            let trie = ctx
-                .cache
-                .entry(key)
-                .or_insert_with(|| {
-                    let mut trie = Trie::default();
-                    for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
-                        if shuffle.iter().all(|group| group[1..].iter().all(|i| tuple[*i] == tuple[group[0]])) {
-                            trie.insert(&index, tuple);
+            let trie =
+                ctx.cache
+                    .entry(key)
+                    .or_insert_with(|| {
+                        let mut trie = Index::default();
+                        for tuple in db.get(&(atom.symbol.clone(), atom.arity)) {
+                            if shuffle.iter().all(|group| {
+                                group[1..].iter().all(|i| tuple[*i] == tuple[group[0]])
+                            }) {
+                                trie.insert(&access_path, tuple);
+                            }
                         }
-                    }
-                    Arc::new(trie)
-                })
-                .clone();
+                        Arc::new(trie)
+                    })
+                    .clone();
 
-            tries.push(trie)
+            break_ats.push(break_at);
+            tries.push(trie);
         }
 
-        let mut tries: Vec<&Trie<T>> = tries.iter().map(|t| t.as_ref()).collect();
+        let mut tries: Vec<&Index<T>> = tries
+            .iter()
+            .map(|t| t.as_ref())
+            .collect();
 
-        let empty = Trie::default();
-        self.gj(&mut f, &mut vec![], &vars, &mut tries, &empty)
+        let empty = Index::default();
+        self.gj(&mut f, &mut vec![], &vars, &mut tries, &break_ats, &empty)
     }
 
     #[inline]
-    fn gj_impl_base<'a, F>(
+    fn gj_impl_base<'a, F, T>(
         &self,
         f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&Trie<T>],
-        _empty: &Trie<T>,
+        relations: &mut [&Index<T>],
+        break_ats: &[usize],
+        _empty: &Index<T>,
     ) -> Result
     where
         F: FnMut(&[T]) -> Result,
+        T: Data,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
 
         let (x, js) = &vars[pos];
         debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
-
         match js.len() {
             1 => {
                 let j = js[0];
                 tuple.push(Default::default());
-                for val in relations[j].0.keys() {
+                for val in relations[j].trie.keys() {
                     tuple[pos] = val.clone();
                     f(tuple)?;
                 }
                 tuple.pop();
             }
             2 => {
-                let (j_min, j_max) = if relations[js[0]].len() < relations[js[1]].len() {
+                let (j_min, j_max) = if relations[js[0]].map_len() < relations[js[1]].map_len() {
                     (js[0], js[1])
                 } else {
                     (js[1], js[0])
                 };
                 let r = relations[j_min];
                 let rj = relations[j_max];
-                let intersection = r.0.keys().filter(|t| rj.0.contains_key(t));
+                let intersection = r.trie.keys().filter(|t| rj.trie.contains_key(t));
                 tuple.push(Default::default());
                 for val in intersection {
                     tuple[pos] = val.clone();
@@ -460,13 +478,13 @@ where
                 let j_min = js
                     .iter()
                     .copied()
-                    .min_by_key(|j| relations[*j].len())
+                    .min_by_key(|j| relations[*j].map_len())
                     .unwrap();
 
-                let mut intersection: Vec<T> = relations[j_min].0.keys().cloned().collect();
+                let mut intersection: Vec<T> = relations[j_min].trie.keys().cloned().collect();
                 for &j in js {
                     if j != j_min {
-                        let rj = &relations[j].0;
+                        let rj = &relations[j].trie;
                         intersection.retain(|t| rj.contains_key(t));
                     }
                 }
@@ -484,16 +502,18 @@ where
     }
 
     #[inline]
-    fn gj_impl<'a, This>(
+    fn gj_impl<'a, T, This>(
         &self,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<T>],
-        empty: &'a Trie<T>,
+        relations: &mut [&'a Index<T>],
+        break_ats: &[usize],
+        empty: &'a Index<T>,
         mut this: This,
     ) -> Result
     where
-        This: FnMut(&mut Vec<T>, &mut [&'a Trie<T>]) -> Result,
+        This: FnMut(&mut Vec<T>, &mut [&'a Index<T>]) -> Result,
+        T: Data,
     {
         let pos = tuple.len();
         assert!(pos < vars.len());
@@ -506,8 +526,8 @@ where
                 let j = js[0];
                 let r = relations[j];
                 tuple.push(Default::default());
-                for val in relations[j].0.keys() {
-                    relations[j] = r.0.get(&val).unwrap_or(empty);
+                for val in relations[j].trie.keys() {
+                    relations[j] = r.trie.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
                     this(tuple, relations)?;
                 }
@@ -515,18 +535,18 @@ where
                 relations[j] = r;
             }
             2 => {
-                let (j_min, j_max) = if relations[js[0]].len() < relations[js[1]].len() {
+                let (j_min, j_max) = if relations[js[0]].map_len() < relations[js[1]].map_len() {
                     (js[0], js[1])
                 } else {
                     (js[1], js[0])
                 };
                 let r = relations[j_min];
                 let rj = relations[j_max];
-                let intersection = r.0.keys().filter(|t| rj.0.contains_key(t));
+                let intersection = r.trie.keys().filter(|t| rj.trie.contains_key(t));
                 tuple.push(Default::default());
                 for val in intersection {
-                    relations[j_min] = r.0.get(&val).unwrap_or(empty);
-                    relations[j_max] = rj.0.get(&val).unwrap_or(empty);
+                    relations[j_min] = r.trie.get(&val).unwrap_or(empty);
+                    relations[j_max] = rj.trie.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
                     this(tuple, relations)?;
                 }
@@ -538,13 +558,13 @@ where
                 let j_min = js
                     .iter()
                     .copied()
-                    .min_by_key(|j| relations[*j].len())
+                    .min_by_key(|j| relations[*j].map_len())
                     .unwrap();
 
-                let mut intersection: Vec<T> = relations[j_min].0.keys().cloned().collect();
+                let mut intersection: Vec<T> = relations[j_min].trie.keys().cloned().collect();
                 for &j in js {
                     if j != j_min {
-                        let rj = &relations[j].0;
+                        let rj = &relations[j].trie;
                         intersection.retain(|t| rj.contains_key(t));
                     }
                 }
@@ -553,7 +573,7 @@ where
                 tuple.push(Default::default());
                 for val in intersection {
                     for (&j, r) in js.iter().zip(&jrelations) {
-                        let sub_r = r.0.get(&val).unwrap_or(empty);
+                        let sub_r = r.trie.get(&val).unwrap_or(empty);
                         relations[j] = sub_r;
                     }
                     tuple[pos] = val;
@@ -568,29 +588,27 @@ where
         Ok(())
     }
 
-    fn gj<'a, F>(
+    fn gj<'a, T, F>(
         &self,
         f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Trie<T>],
-        empty: &'a Trie<T>,
+        relations: &mut [&'a Index<T>],
+        break_ats: &[usize],
+        empty: &'a Index<T>,
     ) -> Result
     where
         F: FnMut(&[T]) -> Result,
+        T: Data,
     {
         let rem = vars.len() - tuple.len() - 1;
         match rem {
-            0 => {
-                self.gj_impl_base(f, tuple, vars, relations, empty)
-            }
-            1 => {
-                self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
-                    self.gj_impl_base(f, tuple, vars, relations, empty)
-                })
-            }
-            _ => self.gj_impl(tuple, vars, relations, empty, |tuple, relations| {
-                self.gj(f, tuple, vars, relations, empty)
+            0 => self.gj_impl_base(f, tuple, vars, relations, break_ats, empty),
+            1 => self.gj_impl(tuple, vars, relations, break_ats, empty, |tuple, relations| {
+                self.gj_impl_base(f, tuple, vars, relations, break_ats, empty)
+            }),
+            _ => self.gj_impl(tuple, vars, relations, break_ats, empty, |tuple, relations| {
+                self.gj(f, tuple, vars, relations, break_ats, empty)
             }),
         }
     }
