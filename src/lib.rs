@@ -267,7 +267,7 @@ impl<T: Data> Index<T> {
 
 #[derive(Debug, Clone)]
 pub struct EvalContext<S, T: Display> {
-    cache: HashMap<(S, usize, Vec<Vec<usize>>), Arc<Index<T>>>,
+    cache: HashMap<(S, usize, Vec<Vec<usize>>, usize), Arc<Index<T>>>,
 }
 
 impl<S, T: Display> EvalContext<S, T> {
@@ -368,7 +368,6 @@ where
                     }
                 }
             }
-            let chunk_size = access_path.len();
             let break_at = access_path
                 .iter()
                 .rev()
@@ -389,7 +388,7 @@ where
                 buf_path: buf_path,
             };
 
-            let key = (atom.symbol.clone(), atom.arity, shuffle.clone());
+            let key = (atom.symbol.clone(), atom.arity, shuffle.clone(), break_at);
             // only keep meaningful constraints
             shuffle.retain(|group| group.len() > 1);
             let trie =
@@ -409,7 +408,7 @@ where
                     .clone();
 
             break_ats.push(break_at);
-            chunk_sizes.push(chunk_size);
+            chunk_sizes.push(buf_path.len());
             tries.push(trie);
         }
 
@@ -418,6 +417,8 @@ where
             .map(|t| t.as_ref())
             .collect();
 
+        // println!("{:?}", tries);
+        println!("{:?},\n {:?},\n {:?}", vars, break_ats, chunk_sizes);
         let empty = Index::default();
         self.gj(&mut f, &mut vec![], &vars, &mut tries, &mut break_ats, &chunk_sizes, &empty)
     }
@@ -429,6 +430,7 @@ where
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
         relations: &mut [&Index<T>],
+        break_ats: &[usize],
         _empty: &Index<T>,
     ) -> Result
     where
@@ -442,16 +444,22 @@ where
         debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
         match js.len() {
             1 => {
-                // no need to implement batching for the base case
-                // because there's always only one variable 
-                // remaining in the base case.
                 let j = js[0];
-                tuple.push(Default::default());
-                for val in relations[j].trie.keys() {
-                    tuple[pos] = val.clone();
-                    f(tuple)?;
+                if break_ats[j] == 0 {
+                    tuple.push(Default::default());
+                    for val in &relations[j].buf {
+                        tuple[pos] = val.clone();
+                        f(tuple)?;
+                    }
+                    tuple.pop();
+                } else {
+                    tuple.push(Default::default());
+                    for val in relations[j].trie.keys() {
+                        tuple[pos] = val.clone();
+                        f(tuple)?;
+                    }
+                    tuple.pop();
                 }
-                tuple.pop();
             }
             2 => {
                 let (j_min, j_max) = if relations[js[0]].map_len() < relations[js[1]].map_len() {
@@ -497,8 +505,9 @@ where
     }
 
     #[inline]
-    fn gj_impl<'a, T, This>(
+    fn gj_impl<'a, T, This, F>(
         &self,
+        f: &mut F,
         tuple: &mut Vec<T>,
         vars: &[(V, Vec<usize>)],
         relations: &mut [&'a Index<T>],
@@ -508,14 +517,11 @@ where
         mut this: This,
     ) -> Result
     where
-        This: FnMut(&mut Vec<T>, &mut [&'a Index<T>], &mut [usize]) -> Result,
+        F: FnMut(&[T]) -> Result,
+        This: FnMut(&mut F, &mut Vec<T>, &mut [&'a Index<T>], &mut [usize]) -> Result,
         T: Data,
     {
         let pos = tuple.len();
-        if !(pos < vars.len()) {
-            eprintln!("ERROR: pos: {}, vars.len(): {}", pos, vars.len());
-            eprintln!("{:?} {:?}", tuple, vars);
-        }
         assert!(pos < vars.len());
 
         let (x, js) = &vars[pos];
@@ -527,14 +533,25 @@ where
                 if break_ats[j] == 0 {
                     // TODO: pattern match and unroll on the size
                     let len = tuple.len();
-                    tuple.resize(len + chunk_sizes[j], Default::default());
-                    for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
-                        for i in 0..chunk_sizes[j] {
-                            tuple[len + i] = chunk[i].clone();
+                    if len + chunk_sizes[j] == vars.len() {
+                        tuple.resize(len + chunk_sizes[j], Default::default());
+                        for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
+                            for i in 0..chunk_sizes[j] {
+                                tuple[len + i] = chunk[i].clone();
+                            }
+                            f(tuple)?;
                         }
-                        this(tuple, relations, break_ats)?;
+                        tuple.truncate(len);
+                    } else {
+                        tuple.resize(len + chunk_sizes[j], Default::default());
+                        for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
+                            for i in 0..chunk_sizes[j] {
+                                tuple[len + i] = chunk[i].clone();
+                            }
+                            this(f, tuple, relations, break_ats)?;
+                        }
+                        tuple.truncate(len);
                     }
-                    tuple.truncate(len);
                 } else {
                     let r = relations[j];
                     tuple.push(Default::default());
@@ -542,7 +559,7 @@ where
                     for val in relations[j].trie.keys() {
                         relations[j] = r.trie.get(&val).unwrap_or(empty);
                         tuple[pos] = val.clone();
-                        this(tuple, relations, break_ats)?;
+                        this(f, tuple, relations, break_ats)?;
                     }
                     break_ats[j] += 1;
                     tuple.pop();
@@ -565,7 +582,7 @@ where
                     relations[j_min] = r.trie.get(&val).unwrap_or(empty);
                     relations[j_max] = rj.trie.get(&val).unwrap_or(empty);
                     tuple[pos] = val.clone();
-                    this(tuple, relations, break_ats)?;
+                    this(f, tuple, relations, break_ats)?;
                 }
                 tuple.pop();
                 break_ats[j_min] += 1;
@@ -597,7 +614,7 @@ where
                         relations[j] = sub_r;
                     }
                     tuple[pos] = val;
-                    this(tuple, relations, break_ats)?;
+                    this(f, tuple, relations, break_ats)?;
                 }
                 tuple.pop();
                 for (&j, r) in js.iter().zip(&jrelations) {
@@ -625,11 +642,11 @@ where
     {
         let rem = vars.len() - tuple.len() - 1;
         match rem {
-            0 => self.gj_impl_base(f, tuple, vars, relations, empty),
-            1 => self.gj_impl(tuple, vars, relations, break_ats, chunk_sizes, empty, |tuple, relations, _break_ats| {
-                self.gj_impl_base(f, tuple, vars, relations, empty)
+            0 => self.gj_impl_base(f, tuple, vars, relations, break_ats, empty),
+            1 => self.gj_impl(f, tuple, vars, relations, break_ats, chunk_sizes, empty, |f, tuple, relations, break_ats| {
+                self.gj_impl_base(f, tuple, vars, relations, break_ats, empty)
             }),
-            _ => self.gj_impl(tuple, vars, relations, break_ats, chunk_sizes, empty, |tuple, relations, break_ats| {
+            _ => self.gj_impl(f, tuple, vars, relations, break_ats, chunk_sizes, empty, |f, tuple, relations, break_ats| {
                 self.gj(f, tuple, vars, relations, break_ats, chunk_sizes, empty)
             }),
         }
