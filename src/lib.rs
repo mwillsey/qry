@@ -253,8 +253,7 @@ impl<T: Data> Index<T> {
         self.trie.len()
     }
 
-    fn insert(&mut self, shuffle: &AccessPath<'_>, tuple: &[T])
-    {
+    fn insert(&mut self, shuffle: &AccessPath<'_>, tuple: &[T]) {
         let mut index = self;
         for i in shuffle.trie_path {
             index = index.trie.entry(tuple[*i].clone()).or_default();
@@ -316,7 +315,7 @@ where
             return (vars_card[s] < 100)
                 .cmp(&(vars_card[t] < 100))
                 .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
-                .then_with(|| vars_card[s].cmp(&vars_card[t]))
+                .then_with(|| vars_card[s].cmp(&vars_card[t]));
         });
 
         // next add variables with only one occurrence, so they are
@@ -412,15 +411,19 @@ where
             tries.push(trie);
         }
 
-        let mut tries: Vec<&Index<T>> = tries
-            .iter()
-            .map(|t| t.as_ref())
-            .collect();
+        let mut tries: Vec<&Index<T>> = tries.iter().map(|t| t.as_ref()).collect();
 
         // println!("{:?}", tries);
-        println!("{:?},\n {:?},\n {:?}", vars, break_ats, chunk_sizes);
         let empty = Index::default();
-        self.gj(&mut f, &mut vec![], &vars, &mut tries, &mut break_ats, &chunk_sizes, &empty)
+        self.gj(
+            &mut f,
+            &mut vec![],
+            &vars,
+            &mut tries,
+            &mut break_ats,
+            &chunk_sizes,
+            &empty,
+        )
     }
 
     #[inline]
@@ -535,20 +538,70 @@ where
                     let len = tuple.len();
                     if len + chunk_sizes[j] == vars.len() {
                         tuple.resize(len + chunk_sizes[j], Default::default());
-                        for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
-                            for i in 0..chunk_sizes[j] {
-                                tuple[len + i] = chunk[i].clone();
+                        match chunk_sizes[j] {
+                            1 => {
+                                for i in (0..relations[j].buf.len()).step_by(1) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    f(tuple)?;
+                                }
                             }
-                            f(tuple)?;
-                        }
+                            2 => {
+                                for i in (0..relations[j].buf.len()).step_by(2) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
+                                    f(tuple)?;
+                                }
+                            }
+                            3 => {
+                                for i in (0..relations[j].buf.len()).step_by(3) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
+                                    tuple[len + 2] = relations[j].buf[i + 2].clone();
+                                    f(tuple)?;
+                                }
+                            }
+                            _ => {
+                                for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
+                                    for i in 0..chunk_sizes[j] {
+                                        tuple[len + i] = chunk[i].clone();
+                                    }
+                                    f(tuple)?;
+                                }
+                            }
+                        };
                         tuple.truncate(len);
                     } else {
                         tuple.resize(len + chunk_sizes[j], Default::default());
-                        for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
-                            for i in 0..chunk_sizes[j] {
-                                tuple[len + i] = chunk[i].clone();
+                        match chunk_sizes[j] {
+                            1 => {
+                                for i in (0..relations[j].buf.len()).step_by(1) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    this(f, tuple, relations, break_ats)?;
+                                }
                             }
-                            this(f, tuple, relations, break_ats)?;
+                            2 => {
+                                for i in (0..relations[j].buf.len()).step_by(2) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
+                                    this(f, tuple, relations, break_ats)?;
+                                }
+                            }
+                            3 => {
+                                for i in (0..relations[j].buf.len()).step_by(3) {
+                                    tuple[len] = relations[j].buf[i].clone();
+                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
+                                    tuple[len + 2] = relations[j].buf[i + 2].clone();
+                                    this(f, tuple, relations, break_ats)?;
+                                }
+                            }
+                            _ => {
+                                for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
+                                    for i in 0..chunk_sizes[j] {
+                                        tuple[len + i] = chunk[i].clone();
+                                    }
+                                    this(f, tuple, relations, break_ats)?;
+                                }
+                            }
                         }
                         tuple.truncate(len);
                     }
@@ -643,12 +696,30 @@ where
         let rem = vars.len() - tuple.len() - 1;
         match rem {
             0 => self.gj_impl_base(f, tuple, vars, relations, break_ats, empty),
-            1 => self.gj_impl(f, tuple, vars, relations, break_ats, chunk_sizes, empty, |f, tuple, relations, break_ats| {
-                self.gj_impl_base(f, tuple, vars, relations, break_ats, empty)
-            }),
-            _ => self.gj_impl(f, tuple, vars, relations, break_ats, chunk_sizes, empty, |f, tuple, relations, break_ats| {
-                self.gj(f, tuple, vars, relations, break_ats, chunk_sizes, empty)
-            }),
+            1 => self.gj_impl(
+                f,
+                tuple,
+                vars,
+                relations,
+                break_ats,
+                chunk_sizes,
+                empty,
+                |f, tuple, relations, break_ats| {
+                    self.gj_impl_base(f, tuple, vars, relations, break_ats, empty)
+                },
+            ),
+            _ => self.gj_impl(
+                f,
+                tuple,
+                vars,
+                relations,
+                break_ats,
+                chunk_sizes,
+                empty,
+                |f, tuple, relations, break_ats| {
+                    self.gj(f, tuple, vars, relations, break_ats, chunk_sizes, empty)
+                },
+            ),
         }
     }
 }
