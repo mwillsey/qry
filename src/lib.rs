@@ -10,12 +10,6 @@ use bumpalo::Bump;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
-mod expr;
-pub use expr::*;
-
-mod util;
-use util::*;
-
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
 
@@ -74,7 +68,7 @@ impl<V: Eq + Clone, S> Atom<V, S> {
     }
 
     pub fn has_var(&self, v: &V) -> bool {
-        self.vars().position(|x| &x == v).is_some()
+        self.vars().any(|x| &x == v)
     }
 }
 
@@ -116,136 +110,10 @@ where
     }
 }
 
-impl<V, S> Query<V, S>
-where
-    V: Hash + Eq + Clone,
-    S: RelationSymbol + 'static,
-{
-    // pub fn compile(&self) -> (VarMap<V>, Expr<S, T>) {
-    //     let na = self.atoms.len();
-    //     assert_ne!(na, 0);
-
-    //     let mut exprs: Vec<(usize, usize, VarMap<V>, Expr<S, T>)> = self
-    //         .atoms
-    //         .iter()
-    //         .map(|atom| {
-    //             let mut used_vars: HashMap<V, Vec<usize>> = Default::default();
-    //             let mut term_eqs: Vec<(T, usize)> = vec![];
-    //             for (i, term) in atom.terms.iter().enumerate() {
-    //                 match term {
-    //                     Term::Variable(v) => used_vars.entry(v.clone()).or_default().push(i),
-    //                     Term::Constant(c) => term_eqs.push((c.clone(), i)),
-    //                 }
-    //             }
-
-    //             let mut var_map = VarMap::default();
-    //             let mut var_eqs: Vec<(usize, usize)> = vec![];
-    //             for (v, occurences) in used_vars {
-    //                 var_map.insert(v, occurences[0]);
-    //                 for pair in occurences.windows(2) {
-    //                     var_eqs.push((pair[0], pair[1]))
-    //                 }
-    //             }
-
-    //             let n_filters = var_eqs.len() + term_eqs.len();
-    //             let expr = Expr::Scan {
-    //                 relation: (atom.symbol.clone(), atom.arity),
-    //                 var_eqs,
-    //                 term_eqs,
-    //             };
-    //             (1, n_filters, var_map, expr)
-    //         })
-    //         .collect();
-
-    //     while exprs.len() > 1 {
-    //         let mut proposals = vec![];
-    //         let mut iter = exprs.iter().enumerate();
-    //         while let Some((i1, (d1, nf1, v1, _e1))) = iter.next() {
-    //             for (i2, (d2, nf2, v2, _e2)) in iter.clone() {
-    //                 let nf = nf1 + nf2;
-    //                 let mut score = 0;
-    //                 let mut var_map = VarMap::default();
-    //                 let mut merge: Vec<Sided> = vec![];
-    //                 for (v, i) in v1.iter() {
-    //                     var_map.insert(v.clone(), merge.len());
-    //                     merge.push(Sided::left(*i));
-    //                 }
-    //                 for (v, i) in v2.iter() {
-    //                     if !v1.contains_key(v) {
-    //                         var_map.insert(v.clone(), merge.len());
-    //                         merge.push(Sided::right(*i));
-    //                     } else {
-    //                         score += 1;
-    //                     }
-    //                 }
-    //                 proposals.push(((d1.max(d2) + 1, score, nf), var_map, merge, (i1, i2)));
-    //             }
-    //         }
-    //         let ((depth, score, nf), var_map, merge, (i1, i2)) =
-    //             proposals.iter().max_by_key(|p| p.0).unwrap().clone();
-    //         // dbg!(score, nf);
-    //         assert!(i1 < i2);
-    //         // must remove i2 first to not mess up index
-    //         let (_, nf1, v2, e2) = exprs.remove(i2);
-    //         let (_, nf2, v1, e1) = exprs.remove(i1);
-    //         let (key1, key2): (Vec<usize>, Vec<usize>) = v1
-    //             .iter()
-    //             .filter_map(|(v, i1)| v2.get(v).map(|i2| (i1, i2)))
-    //             .unzip();
-    //         assert_eq!(score, key1.len());
-    //         let expr = Expr::Join {
-    //             left: Keyed {
-    //                 key: key1,
-    //                 expr: Box::new(e1),
-    //             },
-    //             right: Keyed {
-    //                 key: key2,
-    //                 expr: Box::new(e2),
-    //             },
-    //             merge,
-    //         };
-    //         exprs.push((depth, nf, var_map, expr));
-    //     }
-
-    //     assert_eq!(exprs.len(), 1);
-    //     let (_, _nf, varmap, expr) = exprs.pop().unwrap();
-    //     (varmap, expr)
-    // }
-}
-
 #[derive(Debug, Default)]
-struct Index<T: Display> {
+struct Index<T> {
     buf: Vec<T>,
     trie: HashMap<T, Self>,
-}
-
-// impl<'bump, T: Display> Display for Trie<'bump, T> {
-// }
-
-// impl<'a, T: Display> Default for Trie<'a, T> {
-//     fn default() -> Self {
-//         Self(Default::default())
-//     }
-// }
-
-// impl<'a, T: Data> Trie<'a, T> {
-//     fn len(&self) -> usize {
-//         self.0.len()
-//     }
-
-//     fn insert(&mut self, bump: &'a Bump, shuffle: &[usize], tuple: &[T]) {
-//         debug_assert!(shuffle.len() <= tuple.len());
-//         // debug_assert_eq!(shuffle.len(), tuple.len());
-//         let mut trie = self;
-//         for i in shuffle {
-//             trie = trie.0.get_or_default(tuple[*i].clone(), bump);
-//         }
-//     }
-// }
-
-struct AccessPath<'a> {
-    trie_path: &'a [usize],
-    buf_path: &'a [usize],
 }
 
 impl<T: Data> Index<T> {
@@ -253,12 +121,22 @@ impl<T: Data> Index<T> {
         self.trie.len()
     }
 
-    fn insert(&mut self, shuffle: &AccessPath<'_>, tuple: &[T]) {
+    fn intersect_keys<'a, const N: usize>(
+        &'a self,
+        others: [&'a Self; N],
+    ) -> impl Iterator<Item = T> + 'a {
+        self.trie
+            .keys()
+            .cloned()
+            .filter(move |k| others.iter().all(|idx| idx.trie.contains_key(k)))
+    }
+
+    fn insert(&mut self, trie_path: &[usize], buf_path: &[usize], tuple: &[T]) {
         let mut index = self;
-        for i in shuffle.trie_path {
+        for i in trie_path {
             index = index.trie.entry(tuple[*i].clone()).or_default();
         }
-        for i in shuffle.buf_path {
+        for i in buf_path {
             index.buf.push(tuple[*i].clone());
         }
     }
@@ -308,14 +186,14 @@ where
         // first only consider variables with multi occurrence
         let mut vars: Vec<V> = vars_occur
             .iter()
-            .filter_map(|(v, occur)| if *occur > 1 { Some(v) } else { None })
+            .filter_map(|(v, occur)| (*occur > 1).then(|| v))
             .cloned()
             .collect();
         vars.sort_by(|s, t| {
-            return (vars_card[s] < 100)
+            (vars_card[s] < 100)
                 .cmp(&(vars_card[t] < 100))
                 .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
-                .then_with(|| vars_card[s].cmp(&vars_card[t]));
+                .then_with(|| vars_card[s].cmp(&vars_card[t]))
         });
 
         // next add variables with only one occurrence, so they are
@@ -336,7 +214,7 @@ where
         varmap: &VarMap<V>,
         db: &Database<S, T>,
         ctx: &mut EvalContext<S, T>,
-        mut f: F,
+        f: F,
     ) -> Result
     where
         F: FnMut(&[T]) -> Result,
@@ -344,7 +222,7 @@ where
     {
         let vars: Vec<_> = varmap
             .iter()
-            .map(|v| (v.clone(), self.by_var[v].clone()))
+            .map(|v| (v.clone(), self.by_var[v].as_slice()))
             .collect();
 
         let mut tries: Vec<Arc<Index<T>>> = Vec::with_capacity(self.atoms.len());
@@ -357,7 +235,7 @@ where
                 let mut found_var = false;
                 for (i, term) in atom.terms.iter().enumerate() {
                     if var == &term.0 && !access_path.contains(&i) {
-                        if found_var == false {
+                        if !found_var {
                             found_var = true;
                             access_path.push(i);
                             shuffle.push(vec![i]);
@@ -382,10 +260,6 @@ where
                 .map(|rlen| access_path.len() - rlen)
                 .unwrap_or(0);
             let (trie_path, buf_path) = access_path.split_at(break_at);
-            let access_path = AccessPath {
-                trie_path: trie_path,
-                buf_path: buf_path,
-            };
 
             let key = (atom.symbol.clone(), atom.arity, shuffle.clone(), break_at);
             // only keep meaningful constraints
@@ -399,7 +273,7 @@ where
                             if shuffle.iter().all(|group| {
                                 group[1..].iter().all(|i| tuple[*i] == tuple[group[0]])
                             }) {
-                                trie.insert(&access_path, tuple);
+                                trie.insert(trie_path, buf_path, tuple);
                             }
                         }
                         Arc::new(trie)
@@ -411,315 +285,173 @@ where
             tries.push(trie);
         }
 
-        let mut tries: Vec<&Index<T>> = tries.iter().map(|t| t.as_ref()).collect();
+        // TODO right now this is banking on some invariants from the
+        // variable ordering (all non-intersections are last and grouped)
 
-        // println!("{:?}", tries);
-        let empty = Index::default();
-        self.gj(
-            &mut f,
-            &mut vec![],
-            &vars,
-            &mut tries,
-            &mut break_ats,
-            &chunk_sizes,
-            &empty,
-        )
-    }
-
-    #[inline]
-    fn gj_impl_base<'a, F, T>(
-        &self,
-        f: &mut F,
-        tuple: &mut Vec<T>,
-        vars: &[(V, Vec<usize>)],
-        relations: &mut [&Index<T>],
-        break_ats: &[usize],
-        _empty: &Index<T>,
-    ) -> Result
-    where
-        F: FnMut(&[T]) -> Result,
-        T: Data,
-    {
-        let pos = tuple.len();
-        assert!(pos < vars.len());
-
-        let (x, js) = &vars[pos];
-        debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
-        match js.len() {
-            1 => {
-                let j = js[0];
-                if break_ats[j] == 0 {
-                    tuple.push(Default::default());
-                    for val in &relations[j].buf {
-                        tuple[pos] = val.clone();
-                        f(tuple)?;
-                    }
-                    tuple.pop();
-                } else {
-                    tuple.push(Default::default());
-                    for val in relations[j].trie.keys() {
-                        tuple[pos] = val.clone();
-                        f(tuple)?;
-                    }
-                    tuple.pop();
-                }
+        let mut intersection_groups = vec![];
+        for (_v, occurs) in &vars {
+            if occurs.len() > 1 {
+                intersection_groups.push(*occurs);
+            } else {
+                break;
             }
-            2 => {
-                let (j_min, j_max) = if relations[js[0]].map_len() < relations[js[1]].map_len() {
-                    (js[0], js[1])
-                } else {
-                    (js[1], js[0])
-                };
-                let r = relations[j_min];
-                let rj = relations[j_max];
-                let intersection = r.trie.keys().filter(|t| rj.trie.contains_key(t));
-                tuple.push(Default::default());
-                for val in intersection {
-                    tuple[pos] = val.clone();
-                    f(tuple)?;
-                }
-                tuple.pop();
-            }
-            _ => {
-                let j_min = js
-                    .iter()
-                    .copied()
-                    .min_by_key(|j| relations[*j].map_len())
-                    .unwrap();
-
-                let mut intersection: Vec<T> = relations[j_min].trie.keys().cloned().collect();
-                for &j in js {
-                    if j != j_min {
-                        let rj = &relations[j].trie;
-                        intersection.retain(|t| rj.contains_key(t));
-                    }
-                }
-
-                let pos = tuple.len();
-                tuple.push(Default::default());
-                for val in intersection {
-                    tuple[pos] = val;
-                    f(tuple)?;
-                }
-                tuple.pop();
-            }
-        };
-        Ok(())
-    }
-
-    #[inline]
-    fn gj_impl<'a, T, This, F>(
-        &self,
-        f: &mut F,
-        tuple: &mut Vec<T>,
-        vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Index<T>],
-        break_ats: &mut [usize],
-        chunk_sizes: &[usize],
-        empty: &'a Index<T>,
-        mut this: This,
-    ) -> Result
-    where
-        F: FnMut(&[T]) -> Result,
-        This: FnMut(&mut F, &mut Vec<T>, &mut [&'a Index<T>], &mut [usize]) -> Result,
-        T: Data,
-    {
-        let pos = tuple.len();
-        assert!(pos < vars.len());
-
-        let (x, js) = &vars[pos];
-        debug_assert!(js.iter().all(|&j| self.atoms[j].has_var(x)));
-
-        match js.len() {
-            1 => {
-                let j = js[0];
-                if break_ats[j] == 0 {
-                    // TODO: pattern match and unroll on the size
-                    let len = tuple.len();
-                    if len + chunk_sizes[j] == vars.len() {
-                        tuple.resize(len + chunk_sizes[j], Default::default());
-                        match chunk_sizes[j] {
-                            1 => {
-                                for i in (0..relations[j].buf.len()).step_by(1) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    f(tuple)?;
-                                }
-                            }
-                            2 => {
-                                for i in (0..relations[j].buf.len()).step_by(2) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
-                                    f(tuple)?;
-                                }
-                            }
-                            3 => {
-                                for i in (0..relations[j].buf.len()).step_by(3) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
-                                    tuple[len + 2] = relations[j].buf[i + 2].clone();
-                                    f(tuple)?;
-                                }
-                            }
-                            _ => {
-                                for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
-                                    for i in 0..chunk_sizes[j] {
-                                        tuple[len + i] = chunk[i].clone();
-                                    }
-                                    f(tuple)?;
-                                }
-                            }
-                        };
-                        tuple.truncate(len);
-                    } else {
-                        tuple.resize(len + chunk_sizes[j], Default::default());
-                        match chunk_sizes[j] {
-                            1 => {
-                                for i in (0..relations[j].buf.len()).step_by(1) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    this(f, tuple, relations, break_ats)?;
-                                }
-                            }
-                            2 => {
-                                for i in (0..relations[j].buf.len()).step_by(2) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
-                                    this(f, tuple, relations, break_ats)?;
-                                }
-                            }
-                            3 => {
-                                for i in (0..relations[j].buf.len()).step_by(3) {
-                                    tuple[len] = relations[j].buf[i].clone();
-                                    tuple[len + 1] = relations[j].buf[i + 1].clone();
-                                    tuple[len + 2] = relations[j].buf[i + 2].clone();
-                                    this(f, tuple, relations, break_ats)?;
-                                }
-                            }
-                            _ => {
-                                for chunk in relations[j].buf.chunks_exact(chunk_sizes[j]) {
-                                    for i in 0..chunk_sizes[j] {
-                                        tuple[len + i] = chunk[i].clone();
-                                    }
-                                    this(f, tuple, relations, break_ats)?;
-                                }
-                            }
-                        }
-                        tuple.truncate(len);
-                    }
-                } else {
-                    let r = relations[j];
-                    tuple.push(Default::default());
-                    break_ats[j] -= 1;
-                    for val in relations[j].trie.keys() {
-                        relations[j] = r.trie.get(&val).unwrap_or(empty);
-                        tuple[pos] = val.clone();
-                        this(f, tuple, relations, break_ats)?;
-                    }
-                    break_ats[j] += 1;
-                    tuple.pop();
-                    relations[j] = r;
-                }
-            }
-            2 => {
-                let (j_min, j_max) = if relations[js[0]].map_len() < relations[js[1]].map_len() {
-                    (js[0], js[1])
-                } else {
-                    (js[1], js[0])
-                };
-                let r = relations[j_min];
-                let rj = relations[j_max];
-                let intersection = r.trie.keys().filter(|t| rj.trie.contains_key(t));
-                tuple.push(Default::default());
-                break_ats[j_min] -= 1;
-                break_ats[j_max] -= 1;
-                for val in intersection {
-                    relations[j_min] = r.trie.get(&val).unwrap_or(empty);
-                    relations[j_max] = rj.trie.get(&val).unwrap_or(empty);
-                    tuple[pos] = val.clone();
-                    this(f, tuple, relations, break_ats)?;
-                }
-                tuple.pop();
-                break_ats[j_min] += 1;
-                break_ats[j_max] += 1;
-                relations[j_min] = r;
-                relations[j_max] = rj;
-            }
-            _ => {
-                let j_min = js
-                    .iter()
-                    .copied()
-                    .min_by_key(|j| relations[*j].map_len())
-                    .unwrap();
-
-                let mut intersection: Vec<T> = relations[j_min].trie.keys().cloned().collect();
-                for &j in js {
-                    if j != j_min {
-                        let rj = &relations[j].trie;
-                        intersection.retain(|t| rj.contains_key(t));
-                    }
-                }
-                let jrelations: Vec<_> = js.iter().map(|&j| relations[j]).collect();
-                let pos = tuple.len();
-                tuple.push(Default::default());
-                js.iter().for_each(|j| break_ats[*j] -= 1);
-                for val in intersection {
-                    for (&j, r) in js.iter().zip(&jrelations) {
-                        let sub_r = r.trie.get(&val).unwrap_or(empty);
-                        relations[j] = sub_r;
-                    }
-                    tuple[pos] = val;
-                    this(f, tuple, relations, break_ats)?;
-                }
-                tuple.pop();
-                for (&j, r) in js.iter().zip(&jrelations) {
-                    break_ats[j] += 1;
-                    relations[j] = r;
-                }
-            }
-        };
-        Ok(())
-    }
-
-    fn gj<'a, T, F>(
-        &self,
-        f: &mut F,
-        tuple: &mut Vec<T>,
-        vars: &[(V, Vec<usize>)],
-        relations: &mut [&'a Index<T>],
-        break_ats: &mut [usize],
-        chunk_sizes: &[usize],
-        empty: &'a Index<T>,
-    ) -> Result
-    where
-        F: FnMut(&[T]) -> Result,
-        T: Data,
-    {
-        let rem = vars.len() - tuple.len() - 1;
-        match rem {
-            0 => self.gj_impl_base(f, tuple, vars, relations, break_ats, empty),
-            1 => self.gj_impl(
-                f,
-                tuple,
-                vars,
-                relations,
-                break_ats,
-                chunk_sizes,
-                empty,
-                |f, tuple, relations, break_ats| {
-                    self.gj_impl_base(f, tuple, vars, relations, break_ats, empty)
-                },
-            ),
-            _ => self.gj_impl(
-                f,
-                tuple,
-                vars,
-                relations,
-                break_ats,
-                chunk_sizes,
-                empty,
-                |f, tuple, relations, break_ats| {
-                    self.gj(f, tuple, vars, relations, break_ats, chunk_sizes, empty)
-                },
-            ),
         }
+
+        let tail_vars: HashSet<V> = vars[intersection_groups.len()..]
+            .iter()
+            .map(|(v, _)| v.clone())
+            .collect();
+        let batches = self
+            .atoms
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let has_tail_var = a.vars().any(|v| tail_vars.contains(&v));
+                has_tail_var.then(|| Batch {
+                    relation: i,
+                    chunk_size: chunk_sizes[i],
+                })
+            })
+            .collect();
+
+        VM {
+            f,
+            intersection_groups,
+            batches,
+            tuple: vec![T::default(); self.by_var.len()],
+            relations: tries.iter().map(|t| t.as_ref()).collect(),
+        }
+        .step(0)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Batch {
+    relation: usize,
+    chunk_size: usize,
+}
+
+struct VM<'a, F, T> {
+    f: F,
+    tuple: Vec<T>,
+    intersection_groups: Vec<&'a [usize]>,
+    batches: Vec<Batch>,
+    relations: Vec<&'a Index<T>>,
+}
+
+impl<'a, F, T> VM<'a, F, T>
+where
+    T: Data,
+    F: FnMut(&[T]) -> Result,
+{
+    fn step(&mut self, depth: usize) -> Result {
+        macro_rules! inner {
+            ($intersection:expr, $js:ident, $rs:ident) => {{
+                let intersection = $intersection;
+                if depth + 1 == self.tuple.len() {
+                    for val in intersection {
+                        self.tuple[depth] = val;
+                        (self.f)(&self.tuple)?;
+                    }
+                } else {
+                    for val in intersection {
+                        for (&j, r) in $js.iter().zip($rs.iter()) {
+                            self.relations[j] = r.trie.get(&val).unwrap();
+                        }
+                        self.tuple[depth] = val;
+                        self.step(depth + 1)?
+                    }
+                    for (&j, r) in $js.iter().zip($rs.iter()) {
+                        self.relations[j] = r;
+                    }
+                }
+
+                Ok(())
+            }};
+        }
+
+        if depth >= self.intersection_groups.len() {
+            return self.tail(depth, 0);
+        }
+
+        let js = self.intersection_groups[depth];
+
+        match js.len() {
+            0 => unreachable!(),
+            1 => {
+                let rs = [self.relations[js[0]]];
+                let intersection = rs[0].trie.keys().cloned();
+                inner!(intersection, js, rs)
+            }
+            2 => {
+                let rs = [self.relations[js[0]], self.relations[js[1]]];
+
+                let intersection = if rs[0].map_len() <= rs[1].map_len() {
+                    rs[0].intersect_keys([rs[1]])
+                } else {
+                    rs[1].intersect_keys([rs[0]])
+                };
+                inner!(intersection, js, rs)
+            }
+            3 => {
+                let rs = [
+                    self.relations[js[0]],
+                    self.relations[js[1]],
+                    self.relations[js[2]],
+                ];
+                let is_smaller = |i: usize, j: usize, k: usize| {
+                    rs[i].map_len() <= rs[j].map_len() && rs[i].map_len() <= rs[k].map_len()
+                };
+
+                let intersection = if is_smaller(0, 1, 2) {
+                    rs[0].intersect_keys([rs[1], rs[2]])
+                } else if is_smaller(1, 0, 2) {
+                    rs[1].intersect_keys([rs[0], rs[2]])
+                } else {
+                    rs[2].intersect_keys([rs[0], rs[1]])
+                };
+                inner!(intersection, js, rs)
+            }
+            _ => {
+                let j_min = js
+                    .iter()
+                    .copied()
+                    .min_by_key(|j| self.relations[*j].map_len())
+                    .unwrap();
+
+                let mut intersection: Vec<T> = self.relations[j_min].trie.keys().cloned().collect();
+
+                for &j in js {
+                    if j != j_min {
+                        let rj = &self.relations[j].trie;
+                        intersection.retain(|t| rj.contains_key(t));
+                    }
+                }
+
+                let rs: Vec<_> = js.iter().map(|&j| self.relations[j]).collect();
+                inner!(intersection, js, rs)
+            }
+        }
+    }
+
+    fn tail(&mut self, depth: usize, batch_i: usize) -> Result {
+        assert!(batch_i < self.batches.len());
+        let batch = self.batches[batch_i];
+        let relation = self.relations[batch.relation];
+
+        if batch_i + 1 == self.batches.len() {
+            for chunk in relation.buf.chunks_exact(batch.chunk_size) {
+                self.tuple[depth..].clone_from_slice(chunk);
+                (self.f)(&self.tuple)?;
+            }
+        } else {
+            for chunk in relation.buf.chunks_exact(batch.chunk_size) {
+                let next_depth = depth + batch.chunk_size;
+                self.tuple[depth..next_depth].clone_from_slice(chunk);
+                self.tail(next_depth, batch_i + 1)?;
+            }
+        }
+
+        Ok(())
     }
 }
