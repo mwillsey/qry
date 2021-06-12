@@ -168,19 +168,11 @@ where
     V: Eq + Hash + Clone + Debug,
     S: RelationSymbol,
 {
-    pub fn vars<T: Data>(&self, db: &Database<S, T>) -> VarMap<V> {
-        let mut vars_occur: HashMap<V, usize> = HashMap::default();
+    pub fn vars<T: Data>(&self, _db: &Database<S, T>) -> VarMap<V> {
+        let mut vars_occur: HashMap<V, isize> = HashMap::default();
         for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
             let p = vars_occur.entry(var).or_default();
             *p += 1;
-        }
-        let mut vars_card: HashMap<V, usize> = HashMap::default();
-        for atom in &self.atoms {
-            let relation = db.get(&(atom.symbol.clone(), atom.arity));
-            for var in atom.vars() {
-                let p = vars_card.entry(var).or_default();
-                *p = std::cmp::min(*p, relation.len());
-            }
         }
 
         // first only consider variables with multi occurrence
@@ -189,12 +181,7 @@ where
             .filter_map(|(v, occur)| (*occur > 1).then(|| v))
             .cloned()
             .collect();
-        vars.sort_by(|s, t| {
-            (vars_card[s] < 100)
-                .cmp(&(vars_card[t] < 100))
-                .then_with(|| vars_occur[s].cmp(&vars_occur[t]).reverse())
-                .then_with(|| vars_card[s].cmp(&vars_card[t]))
-        });
+        vars.sort_by_key(|v| -vars_occur[v]);
 
         // next add variables with only one occurrence, so they are
         // batched together by the relation they are in
