@@ -168,7 +168,7 @@ where
     V: Eq + Hash + Clone + Debug,
     S: RelationSymbol,
 {
-    pub fn vars<T: Data>(&self, _db: &Database<S, T>) -> VarMap<V> {
+    pub fn vars<T: Data>(&self, db: &Database<S, T>) -> VarMap<V> {
         let mut vars_occur: HashMap<V, isize> = HashMap::default();
         for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
             let p = vars_occur.entry(var).or_default();
@@ -183,9 +183,12 @@ where
             .collect();
         vars.sort_by_key(|v| -vars_occur[v]);
 
-        // next add variables with only one occurrence, so they are
-        // batched together by the relation they are in
-        for atom in &self.atoms {
+        // Next add variables with only one occurrence, so they are
+        // batched together by the relation they are in.
+        // Do the smaller relations first
+        let mut sorted_atoms = self.atoms.clone();
+        sorted_atoms.sort_by_key(|a| db.get(&(a.symbol.clone(), a.arity)).len());
+        for atom in sorted_atoms.iter() {
             for var in atom.vars() {
                 if vars_occur[&var] == 1 {
                     vars.push(var);
@@ -274,32 +277,24 @@ where
 
         // TODO right now this is banking on some invariants from the
         // variable ordering (all non-intersections are last and grouped)
-
         let mut intersection_groups = vec![];
+        let mut batches: Vec<Batch> = vec![];
         for (_v, occurs) in &vars {
             if occurs.len() > 1 {
+                assert!(batches.is_empty());
                 intersection_groups.push(*occurs);
             } else {
-                break;
+                assert_eq!(occurs.len(), 1);
+                let i = occurs[0];
+                match batches.last() {
+                    Some(b) if b.relation == i => (),
+                    _ => batches.push(Batch {
+                        relation: i,
+                        chunk_size: chunk_sizes[i],
+                    }),
+                }
             }
         }
-
-        let tail_vars: HashSet<V> = vars[intersection_groups.len()..]
-            .iter()
-            .map(|(v, _)| v.clone())
-            .collect();
-        let batches = self
-            .atoms
-            .iter()
-            .enumerate()
-            .filter_map(|(i, a)| {
-                let has_tail_var = a.vars().any(|v| tail_vars.contains(&v));
-                has_tail_var.then(|| Batch {
-                    relation: i,
-                    chunk_size: chunk_sizes[i],
-                })
-            })
-            .collect();
 
         VM {
             f,
