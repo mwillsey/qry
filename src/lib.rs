@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
 };
 
-use bumpalo::Bump;
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
@@ -204,6 +203,11 @@ where
                 }
             }
         }
+
+        log::debug!(
+            "var order: {:?}",
+            vars.iter().map(|v| &self.by_var[v]).collect::<Vec<_>>()
+        );
 
         vars
     }
