@@ -175,13 +175,22 @@ where
             *p += 1;
         }
 
+        let mut vars_card: HashMap<V, usize> = HashMap::default();
+        for atom in &self.atoms {
+            let len = db.get(&(atom.symbol.clone(), atom.arity)).len();
+            for var in atom.vars() {
+                let card = vars_card.entry(var).or_insert(len);
+                *card = len.min(*card);
+            }
+        }
+
         // first only consider variables with multi occurrence
         let mut vars: Vec<V> = vars_occur
             .iter()
             .filter_map(|(v, occur)| (*occur > 1).then(|| v))
             .cloned()
             .collect();
-        vars.sort_by_key(|v| -vars_occur[v]);
+        vars.sort_by_key(|v| (vars_card[v] > 1, -vars_occur[v]));
 
         // Next add variables with only one occurrence, so they are
         // batched together by the relation they are in.
