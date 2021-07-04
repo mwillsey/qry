@@ -41,10 +41,10 @@ impl<S: RelationSymbol, T: Data> Database<S, T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Term<V>(pub V);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Atom<V, S> {
     pub symbol: S,
     pub arity: usize,
@@ -90,7 +90,10 @@ where
     V: Eq + Hash + Clone,
     S: RelationSymbol,
 {
-    pub fn new(atoms: Vec<Atom<V, S>>) -> Self {
+    pub fn new(mut atoms: Vec<Atom<V, S>>) -> Self {
+        let mut deduper = HashSet::default();
+        atoms.retain(|a| deduper.insert(a.clone()));
+
         let mut new = Self {
             atoms,
             by_var: Default::default(),
@@ -168,6 +171,14 @@ where
     S: RelationSymbol,
 {
     pub fn vars<T: Data>(&self, db: &Database<S, T>) -> VarMap<V> {
+        let mut var_pos: HashMap<V, isize> = HashMap::default();
+        for (i, atom) in self.atoms.iter().enumerate() {
+            for var in atom.vars() {
+                var_pos.entry(var).or_insert(i as isize);
+            }
+        }
+
+
         let mut vars_occur: HashMap<V, isize> = HashMap::default();
         for var in self.atoms.iter().flat_map(|atom| atom.vars()) {
             let p = vars_occur.entry(var).or_default();
@@ -189,7 +200,7 @@ where
             .filter_map(|(v, occur)| (*occur > 1).then(|| v))
             .cloned()
             .collect();
-        vars.sort_by_key(|v| (vars_card[v] > 1, -vars_occur[v]));
+        vars.sort_by_key(|v| (vars_card[v] > 1, -vars_occur[v], -var_pos[v]));
 
         // Next add variables with only one occurrence, so they are
         // batched together by the relation they are in.
@@ -438,6 +449,29 @@ where
             for chunk in relation.buf.chunks_exact(batch.chunk_size) {
                 self.tuple[depth..].clone_from_slice(chunk);
                 (self.f)(&self.tuple)?;
+            }
+        } else if batch_i + 2 == self.batches.len() {
+            let batch1 = self.batches[batch_i + 1];
+            let relation1 = self.relations[batch1.relation];
+            let depth1 = depth + batch.chunk_size;
+            let chunks = relation.buf.chunks_exact(batch.chunk_size);
+            let chunks1 = relation1.buf.chunks_exact(batch1.chunk_size);
+            if chunks.len() < chunks1.len() {
+                for chunk in chunks {
+                    self.tuple[depth..depth1].clone_from_slice(chunk);
+                    for chunk in chunks1.clone() {
+                        self.tuple[depth1..].clone_from_slice(chunk);
+                        (self.f)(&self.tuple)?;
+                    }
+                }
+            } else {
+                for chunk in chunks1 {
+                    self.tuple[depth1..].clone_from_slice(chunk);
+                    for chunk in chunks.clone() {
+                        self.tuple[depth..depth1].clone_from_slice(chunk);
+                        (self.f)(&self.tuple)?;
+                    }
+                }
             }
         } else {
             for chunk in relation.buf.chunks_exact(batch.chunk_size) {
