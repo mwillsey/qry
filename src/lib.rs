@@ -1,4 +1,4 @@
-#![allow(unused_imports)]
+
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
@@ -8,6 +8,8 @@ use std::{
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
+
+mod util;
 
 pub trait RelationSymbol: Debug + Clone + Hash + Eq {}
 impl<T> RelationSymbol for T where T: Debug + Clone + Hash + Eq {}
@@ -185,22 +187,96 @@ where
             *p += 1;
         }
 
-        let mut vars_card: HashMap<V, usize> = HashMap::default();
+
+        let mut vars_card: HashMap<V, isize> = HashMap::default();
         for atom in &self.atoms {
-            let len = db.get(&(atom.symbol.clone(), atom.arity)).len();
+            let len = db.get(&(atom.symbol.clone(), atom.arity)).len() as isize;
             for var in atom.vars() {
                 let card = vars_card.entry(var).or_insert(len);
                 *card = len.min(*card);
+
+                // vars_card.entry(var)
+                //     .and_modify(|card| *card = len.min(*card) / 10)
+                //     .or_insert(len);
+
+                // *card = len.min(*card);
+                // let card = vars_card.entry(var).or_insert(len);
+                // *card = len.min(*card);
             }
         }
 
-        // first only consider variables with multi occurrence
-        let mut vars: Vec<V> = vars_occur
-            .iter()
-            .filter_map(|(v, occur)| (*occur > 1).then(|| v))
-            .cloned()
-            .collect();
-        vars.sort_by_key(|v| (vars_card[v] > 1, -vars_occur[v], -var_pos[v]));
+        let mut in_head: HashSet<V> = Default::default();
+        let mut depends_on: HashMap<V, HashSet<V>> = self.by_var.keys().map(|v| (v.clone(), Default::default())).collect();
+        for atom in &self.atoms {
+            let mut vars = atom.vars();
+            let head = vars.next().unwrap();
+            in_head.insert(head.clone());
+            // depends_on.entry(head).or_default().extend(vars);
+            depends_on.entry(head).or_default().extend(vars.filter(|v| vars_occur[v] > 1));
+        }
+        depends_on.retain(|v, _| vars_occur[v] > 1);
+
+        // let max_r = db.relations.iter().map(|((_s, arity), vec)| vec.len() / arity).max().unwrap_or(1) as f64;
+        // let max_r = max_r.max(1.0);
+        // let mut size_fracs: Vec<f64> = self.atoms.iter().map(|a| {
+        //     let r = db.get(&(a.symbol.clone(), a.arity));
+        //     r.len() as f64 / max_r
+        // }).collect();
+
+        // let card_est: HashMap<V, f64> = self.by_var.iter().map(|(v, occurs)| {
+        //     let card = occurs.iter().map(|&r| size_fracs[r]).product();
+        //     (v.clone(), card)
+        // }).collect();
+
+        let mut vars = Vec::with_capacity(self.by_var.len());
+        while !depends_on.is_empty() {
+            // let card_est = |v: &V| self.by_var[v].iter().map(|&r| size_fracs[r]).product::<f64>();
+            // let (v, _) = depends_on.iter().min_by_key(|(v, deps)| {
+            //     // (!deps.is_empty(), util::Total(card_est(v)))
+            //     // (deps.len(), -vars_occur[v], util::Total(card_est(v)))
+            //    (vars_card[v] <= 1, !deps.is_empty(), util::Total(card_est(v)), var_pos[v])
+            // }).unwrap();
+
+            // for &r in &self.by_var[v] {
+            //     size_fracs[r] = size_fracs[r] * size_fracs[r];
+            // }
+            // let (v, _) = depends_on.iter().max_by_key(|(v, deps)| (vars_card[v] <= 1, vars_occur[v], deps.is_empty(), -vars_card[v], var_pos[v])).unwrap();
+//             let (v, _) = depends_on.iter().min_by_kye(|a, b| {
+//                 (!a.1.is_empty()).cmp(&!b.1.is_empty()).then(
+//                     card_est[&a.0].partial_cmp(&card_est[&b.0]).unwrap()
+// )
+//             }).unwrap();
+            let (v, _) = depends_on.iter().max_by_key(|(v, deps)| {
+                // (!deps.is_empty(), util::Total(card_est[v]))
+                // (!deps.is_empty(), -(vars_occur[v] as isize), util::Total(card_est[v]))
+               // (vars_card[v] <= 1, deps.is_empty(), -card_est, var_pos[v])
+                (vars_card[v] <= 1, deps.is_empty(), vars_occur[v], -var_pos[v])
+                // (vars_card[v] > 1, -vars_occur[v])
+            }).unwrap();
+            // let (v, _) = depends_on.iter().min_by_key(|(v, deps)| {
+            //     // let card_est = vars_card[v] / (10_i32.pow((vars_occur[v] - 1) as u32) as isize);
+            //     // let card_est = (vars_card[v] as f64).powf((vars_occur[v] as f64).recip()) as isize;
+            //     let pow = 1 << (vars_occur[v] - 1);
+            //     let card_est = (vars_card[v] as f64).powf((pow as f64).recip()).ceil() as isize;
+            //     if deps.is_empty() { 1.0 } else { card_est[v] }
+            //     // (deps.len(), card_est)
+            //    // (vars_card[v] <= 1, deps.is_empty(), -card_est, var_pos[v])
+            // }).unwrap();
+            let v = v.clone();
+            depends_on.remove(&v);
+            for deps in depends_on.values_mut() {
+                deps.remove(&v);
+            }
+            vars.push(v);
+        }
+
+        // // first only consider variables with multi occurrence
+        // let mut vars: Vec<V> = vars_occur
+        //     .iter()
+        //     .filter_map(|(v, occur)| (*occur > 1).then(|| v))
+        //     .cloned()
+        //     .collect();
+        // vars.sort_by_key(|v| (vars_card[v] > 1, -vars_occur[v], -var_pos[v]));
 
         // Next add variables with only one occurrence, so they are
         // batched together by the relation they are in.
